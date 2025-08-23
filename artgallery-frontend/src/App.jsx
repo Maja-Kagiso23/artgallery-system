@@ -1,15 +1,89 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider } from './auth/AuthContext';
+import ProtectedRoute from './auth/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
-import dashboardpage from './pages/DashboardPage';
+import DashboardPage from './pages/DashboardPage';
+import ArtistManagement from './pages/ArtistManagement';
+import ExhibitionManagement from './pages/ExhibitionManagement';
+import ArtPieceManagement from './pages/ArtPieceManagement'; 
+import ViewExhibitions from './pages/ViewExhibitions';
+
 function App() {
   return (
     <BrowserRouter>
-      <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
-	        <Route path="/dashboard" element={<dashboardpage />} />
-      </Routes>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          
+          {/* Dashboard - accessible by both admin and clerk */}
+          <Route 
+            path="/dashboard" 
+            element={
+              <ProtectedRoute>
+                <DashboardPage />
+              </ProtectedRoute>
+            } 
+          />
+          
+          {/* Artist Management - only for admin users */}
+          <Route 
+            path="/artists" 
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <ArtistManagement />
+              </ProtectedRoute>
+            } 
+          />
+		  
+		{/* Exhibition Management - only for admin users */}
+		<Route 
+		  path="/exhibitions" 
+		  element={
+			<ProtectedRoute requiredRole="admin">
+			  <ExhibitionManagement />
+			</ProtectedRoute>
+		  } 
+		/>
+          
+          {/* Art Piece Management - only for admin users */}
+          <Route 
+            path="/artpieces" 
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <ArtPieceManagement />
+              </ProtectedRoute>
+            } 
+          />
+
+
+
+		{/* Public exhibitions - visitors can access */}
+		<Route 
+		  path="/exhibitions" 
+		  element={<ViewExhibitions />} 
+		/>
+
+		  
+          {/* Default redirect to dashboard if logged in, otherwise login */}
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          
+          {/* Unauthorized access page */}
+          <Route 
+            path="/unauthorized" 
+            element={
+              <div className="min-h-screen flex items-center justify-center bg-gray-50">
+                <div className="text-center">
+                  <h1 className="text-2xl font-bold text-red-600 mb-4">Unauthorized Access</h1>
+                  <p className="text-gray-600 mb-4">You don't have permission to access this page.</p>
+                  <a href="/dashboard" className="text-blue-600 hover:text-blue-800">Go to Dashboard</a>
+                </div>
+              </div>
+            } 
+          />
+        </Routes>
+      </AuthProvider>
     </BrowserRouter>
   );
 }

@@ -1,7 +1,6 @@
 // api/apiService.js
 const API_BASE_URL = 'http://localhost:8000/api';
 
-
 class ApiService {
   constructor() {
     this.baseURL = API_BASE_URL;
@@ -32,13 +31,18 @@ class ApiService {
     };
   }
 
-  // Generic request method
+  // Generic request method (FIXED)
   async request(endpoint, options = {}) {
     const url = `${this.baseURL}${endpoint}`;
     const config = {
       headers: this.getHeaders(),
       ...options,
     };
+
+    // Handle request body
+    if (options.body && config.headers['Content-Type'] === 'application/json') {
+      config.body = options.body;
+    }
 
     try {
       const response = await fetch(url, config);
@@ -51,8 +55,13 @@ class ApiService {
       }
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      }
+
+      // Handle empty responses (like DELETE)
+      if (response.status === 204) {
+        return null;
       }
 
       return await response.json();
@@ -62,38 +71,34 @@ class ApiService {
     }
   }
 
+  // Auth methods
+  async login(credentials) {
+    const response = await fetch(`${this.baseURL}/auth/login/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials),
+    });
 
-// Auth methods
-async login(credentials) {
-  const response = await fetch(`${this.baseURL}/auth/login/`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(credentials),
-  });
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
 
-  let data;
-  try {
-    data = await response.json();
-  } catch {
-    data = {};
+    if (!response.ok) {
+      // Pass back status and message for UI handling
+      throw {
+        status: response.status,
+        message: data.detail || 'Invalid username or password'
+      };
+    }
+
+    this.setAuthToken(data.access);
+    localStorage.setItem('refresh_token', data.refresh);
+    localStorage.setItem('user_data', JSON.stringify(data.user));
+    return data;
   }
-
-  if (!response.ok) {
-    // Pass back status and message for UI handling
-    throw {
-      status: response.status,
-      message: data.detail || 'Invalid username or password'
-    };
-  }
-
-  this.setAuthToken(data.access);
-  localStorage.setItem('refresh_token', data.refresh);
-  localStorage.setItem('user_data', JSON.stringify(data.user));
-  return data;
-}
-
-
-  
 
   async register(userData) {
     const response = await fetch(`${this.baseURL}/auth/register/`, {
@@ -126,9 +131,10 @@ async login(credentials) {
     this.removeAuthToken();
   }
 
-  // Artists
+  // Artists (FIXED - handle pagination)
   async getArtists() {
-    return this.request('/artists/');
+    const data = await this.request('/artists/');
+    return data.results || data; // Extract from pagination or return as-is
   }
 
   async getArtist(id) {
@@ -155,9 +161,10 @@ async login(credentials) {
     });
   }
 
-  // Art Pieces
+  // Art Pieces (FIXED - handle pagination)
   async getArtPieces() {
-    return this.request('/artpieces/');
+    const data = await this.request('/artpieces/');
+    return data.results || data;
   }
 
   async getArtPiece(id) {
@@ -184,9 +191,10 @@ async login(credentials) {
     });
   }
 
-  // Exhibitions
+  // Exhibitions (FIXED - handle pagination)
   async getExhibitions() {
-    return this.request('/exhibitions/');
+    const data = await this.request('/exhibitions/');
+    return data.results || data;
   }
 
   async getExhibition(id) {
@@ -213,9 +221,10 @@ async login(credentials) {
     });
   }
 
-  // Visitors
+  // Visitors (FIXED - handle pagination)
   async getVisitors() {
-    return this.request('/visitors/');
+    const data = await this.request('/visitors/');
+    return data.results || data;
   }
 
   async createVisitor(visitorData) {
@@ -225,9 +234,10 @@ async login(credentials) {
     });
   }
 
-  // Registrations
+  // Registrations (FIXED - handle pagination)
   async getRegistrations() {
-    return this.request('/registrations/');
+    const data = await this.request('/registrations/');
+    return data.results || data;
   }
 
   async registerForExhibition(registrationData) {
@@ -244,9 +254,10 @@ async login(credentials) {
     });
   }
 
-  // Clerks (Admin only)
+  // Clerks (Admin only) (FIXED - handle pagination)
   async getClerks() {
-    return this.request('/clerks/');
+    const data = await this.request('/clerks/');
+    return data.results || data;
   }
 
   async createClerk(clerkData) {
@@ -256,9 +267,10 @@ async login(credentials) {
     });
   }
 
-  // Setup Status (Clerk/Admin only)
+  // Setup Status (Clerk/Admin only) (FIXED - handle pagination)
   async getSetupStatuses() {
-    return this.request('/setupstatuses/');
+    const data = await this.request('/setupstatuses/');
+    return data.results || data;
   }
 
   async updateSetupStatus(id, statusData) {

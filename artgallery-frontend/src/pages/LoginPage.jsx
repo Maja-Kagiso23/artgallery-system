@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import apiService from '../api/apiService';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext'; // Import useAuth
 
 const LoginPage = () => {
   const [credentials, setCredentials] = useState({
@@ -22,6 +23,16 @@ const LoginPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [showRegistrationSuccess, setShowRegistrationSuccess] = useState(false);
+  
+  // Get auth context
+  const { login, isAuthenticated } = useAuth();
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard');
+    }
+  }, [isAuthenticated, navigate]);
 
   useEffect(() => {
     if (location.state?.registrationSuccess) {
@@ -67,44 +78,47 @@ const LoginPage = () => {
     }
   };
 
-const handleSubmit = async (e) => {
-  e.preventDefault();
+  const handleSubmit = async (e) => {
+    e.preventDefault();
 
-  setLoading(true);
-  setApiResponse({ status: '', message: '' });
-  setFieldErrors({ username: '', password: '' });
+    setLoading(true);
+    setApiResponse({ status: '', message: '' });
+    setFieldErrors({ username: '', password: '' });
 
-  if (!validateFields()) {
-    setLoading(false);
-    return;
-  }
+    if (!validateFields()) {
+      setLoading(false);
+      return;
+    }
 
-  try {
-    const data = await apiService.login({
-      username: credentials.username,
-      password: credentials.password
-    });
+    try {
+      const data = await apiService.login({
+        username: credentials.username,
+        password: credentials.password
+      });
 
-    setApiResponse({
-      status: 'success',
-      message: 'Logged in successfully! Redirecting...'
-    });
+      // Update auth context with login data
+      await login(data);
 
-    setTimeout(() => {
-      navigate('/dashboard');
-    }, 1500);
+      setApiResponse({
+        status: 'success',
+        message: 'Logged in successfully! Redirecting...'
+      });
 
-  } catch (error) {
-    setApiResponse({
-      status: 'error',
-      message: error.message || 'Invalid username or password'
-    });
-  } finally {
-    setLoading(false);
-  }
-};
+      // Navigate to dashboard or return location
+      const returnTo = location.state?.from?.pathname || '/dashboard';
+      setTimeout(() => {
+        navigate(returnTo);
+      }, 1500);
 
-
+    } catch (error) {
+      setApiResponse({
+        status: 'error',
+        message: error.message || 'Invalid username or password'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div style={{ 
