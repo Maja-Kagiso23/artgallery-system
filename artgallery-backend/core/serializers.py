@@ -51,38 +51,36 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'role', 'first_name', 'last_name']
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=8)
+    # Include nested visitor and exhibition data
+    visitor_name = serializers.CharField(source='visitor.name', read_only=True)
+    visitor_email = serializers.CharField(source='visitor.email', read_only=True)
+    exhibition_title = serializers.CharField(source='exhibition.title', read_only=True)
+    exhibition_status = serializers.CharField(source='exhibition.status', read_only=True)
+    
+    # Include full nested objects as well (optional, for detailed views)
+    visitor = VisitorSerializer(read_only=True)
+    exhibition = ExhibitionSerializer(read_only=True)
     
     class Meta:
-        model = User
-        fields = ['username', 'email', 'password', 'first_name', 'last_name', 'phone']
-        extra_kwargs = {
-            'password': {'write_only': True},
-            'email': {'required': True}
-        }
-    
-    def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
-        return value
-    
-    def validate_username(self, value):
-        if User.objects.filter(username=value).exists():
-            raise serializers.ValidationError("A user with this username already exists.")
-        return value
-    
-    def create(self, validated_data):
-        # Extract phone if provided (assuming CustomUser has phone field)
-        phone = validated_data.pop('phone', None)
-        password = validated_data.pop('password')
-        
-        user = User(**validated_data)
-        user.set_password(password)
-        user.role = 'visitor'  # Default role
-        
-        # Add phone if the model supports it
-        if phone and hasattr(user, 'phone'):
-            user.phone = phone
-            
-        user.save()
-        return user
+        model = Registration
+        fields = [
+            'id',
+            'visitor',
+            'exhibition', 
+            'attendees_count',
+            'status',
+            'confirmed',
+            'queue_position',
+            'submitted_at',
+            'timestamp',
+            'reviewed_by',
+            'reviewed_at',
+            'rejection_reason',
+            'visitor_notified',
+            # Add the new fields for easy access
+            'visitor_name',
+            'visitor_email',
+            'exhibition_title',
+            'exhibition_status'
+        ]
+        read_only_fields = ['id', 'timestamp', 'submitted_at', 'reviewed_by', 'reviewed_at']

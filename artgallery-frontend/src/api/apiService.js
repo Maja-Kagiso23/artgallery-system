@@ -4,6 +4,8 @@ const API_BASE_URL = 'http://localhost:8000/api';
 class ApiService {
   constructor() {
     this.baseURL = API_BASE_URL;
+    this.isRefreshing = false;
+    this.refreshSubscribers = [];
   }
 
   // Get auth token from localStorage
@@ -20,55 +22,144 @@ class ApiService {
   removeAuthToken() {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    localStorage.removeItem('user_data');
   }
 
   // Get default headers
-  getHeaders() {
+  getHeaders(includeContentType = true) {
     const token = this.getAuthToken();
-    return {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` })
-    };
+    const headers = {};
+    
+    if (includeContentType) {
+      headers['Content-Type'] = 'application/json';
+    }
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  }
+
+  // Handle token refresh
+  async refreshToken() {
+    if (this.isRefreshing) {
+      return new Promise((resolve) => {
+        this.refreshSubscribers.push(resolve);
+      });
+    }
+
+    this.isRefreshing = true;
+    const refreshToken = localStorage.getItem('refresh_token');
+
+    if (!refreshToken) {
+      this.removeAuthToken();
+      window.location.href = '/login';
+      throw new Error('No refresh token available');
+    }
+
+    try {
+      const response = await fetch(`${this.baseURL}/auth/token/refresh/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh: refreshToken }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Token refresh failed');
+      }
+
+      const data = await response.json();
+      this.setAuthToken(data.access);
+      
+      // Notify all subscribers
+      this.refreshSubscribers.forEach(subscriber => subscriber());
+      this.refreshSubscribers = [];
+      
+      return data.access;
+    } catch (error) {
+      this.removeAuthToken();
+      window.location.href = '/login';
+      throw error;
+    } finally {
+      this.isRefreshing = false;
+    }
   }
 
   // Generic request method (FIXED)
   async request(endpoint, options = {}) {
     const url = `${this.baseURL}${endpoint}`;
+    const headers = this.getHeaders(!options.skipContentType);
+    
     const config = {
-      headers: this.getHeaders(),
+      headers: { ...headers, ...options.headers },
+      method: options.method || 'GET',
       ...options,
     };
 
     // Handle request body
     if (options.body && config.headers['Content-Type'] === 'application/json') {
+      config.body = JSON.stringify(options.body);
+    } else if (options.body) {
       config.body = options.body;
+    }
+
+    // Remove body for GET/HEAD requests
+    if (['GET', 'HEAD'].includes(config.method) && config.body) {
+      delete config.body;
     }
 
     try {
       const response = await fetch(url, config);
       
-      if (response.status === 401) {
-        // Token expired or invalid
-        this.removeAuthToken();
-        window.location.href = '/login';
-        throw new Error('Authentication required');
+      // Handle token expiration
+      if (response.status === 401 && !url.includes('/auth/')) {
+        const newToken = await this.refreshToken();
+        if (newToken) {
+          // Retry the original request with new token
+          config.headers['Authorization'] = `Bearer ${newToken}`;
+          return await fetch(url, config).then(res => this.handleResponse(res));
+        }
       }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-      }
-
-      // Handle empty responses (like DELETE)
-      if (response.status === 204) {
-        return null;
-      }
-
-      return await response.json();
+      return await this.handleResponse(response);
     } catch (error) {
       console.error('API request failed:', error);
       throw error;
     }
+  }
+
+  // Handle response
+  async handleResponse(response) {
+    if (response.status === 401) {
+      // Token expired or invalid
+      this.removeAuthToken();
+      window.location.href = '/login';
+      throw new Error('Authentication required');
+    }
+
+    if (!response.ok) {
+      let errorData;
+      try {
+        errorData = await response.json();
+      } catch {
+        errorData = { detail: `HTTP error! status: ${response.status}` };
+      }
+      throw new Error(errorData.detail || errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    // Handle empty responses (like DELETE, 204 No Content)
+    if (response.status === 204) {
+      return null;
+    }
+
+    // Handle text responses (if any)
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      return await response.json();
+    }
+    
+    return await response.text();
   }
 
   // Auth methods
@@ -87,42 +178,36 @@ class ApiService {
     }
 
     if (!response.ok) {
-      // Pass back status and message for UI handling
       throw {
         status: response.status,
-        message: data.detail || 'Invalid username or password'
+        message: data.detail || data.message || 'Invalid username or password'
       };
     }
 
     this.setAuthToken(data.access);
     localStorage.setItem('refresh_token', data.refresh);
-    localStorage.setItem('user_data', JSON.stringify(data.user));
+    
+    if (data.user) {
+      localStorage.setItem('user_data', JSON.stringify(data.user));
+    }
+    
     return data;
   }
 
   async register(userData) {
-    const response = await fetch(`${this.baseURL}/auth/register/`, {
+    return this.request('/auth/register/', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(userData),
+      body: userData,
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'Registration failed');
-    }
-
-    return await response.json();
   }
 
   async logout() {
     const refreshToken = localStorage.getItem('refresh_token');
     if (refreshToken) {
       try {
-        await fetch(`${this.baseURL}/auth/logout/`, {
+        await this.request('/auth/logout/', {
           method: 'POST',
-          headers: this.getHeaders(),
-          body: JSON.stringify({ refresh: refreshToken }),
+          body: { refresh: refreshToken },
         });
       } catch (error) {
         console.error('Logout request failed:', error);
@@ -131,10 +216,15 @@ class ApiService {
     this.removeAuthToken();
   }
 
-  // Artists (FIXED - handle pagination)
+  // Extract results from paginated responses
+  extractResults(data) {
+    return data.results !== undefined ? data.results : data;
+  }
+
+  // Artists
   async getArtists() {
     const data = await this.request('/artists/');
-    return data.results || data; // Extract from pagination or return as-is
+    return this.extractResults(data);
   }
 
   async getArtist(id) {
@@ -144,14 +234,14 @@ class ApiService {
   async createArtist(artistData) {
     return this.request('/artists/', {
       method: 'POST',
-      body: JSON.stringify(artistData),
+      body: artistData,
     });
   }
 
   async updateArtist(id, artistData) {
     return this.request(`/artists/${id}/`, {
       method: 'PUT',
-      body: JSON.stringify(artistData),
+      body: artistData,
     });
   }
 
@@ -161,10 +251,10 @@ class ApiService {
     });
   }
 
-  // Art Pieces (FIXED - handle pagination)
+  // Art Pieces
   async getArtPieces() {
     const data = await this.request('/artpieces/');
-    return data.results || data;
+    return this.extractResults(data);
   }
 
   async getArtPiece(id) {
@@ -174,14 +264,14 @@ class ApiService {
   async createArtPiece(artPieceData) {
     return this.request('/artpieces/', {
       method: 'POST',
-      body: JSON.stringify(artPieceData),
+      body: artPieceData,
     });
   }
 
   async updateArtPiece(id, artPieceData) {
     return this.request(`/artpieces/${id}/`, {
       method: 'PUT',
-      body: JSON.stringify(artPieceData),
+      body: artPieceData,
     });
   }
 
@@ -191,10 +281,10 @@ class ApiService {
     });
   }
 
-  // Exhibitions (FIXED - handle pagination)
+  // Exhibitions
   async getExhibitions() {
     const data = await this.request('/exhibitions/');
-    return data.results || data;
+    return this.extractResults(data);
   }
 
   async getExhibition(id) {
@@ -204,14 +294,14 @@ class ApiService {
   async createExhibition(exhibitionData) {
     return this.request('/exhibitions/', {
       method: 'POST',
-      body: JSON.stringify(exhibitionData),
+      body: exhibitionData,
     });
   }
 
   async updateExhibition(id, exhibitionData) {
     return this.request(`/exhibitions/${id}/`, {
       method: 'PUT',
-      body: JSON.stringify(exhibitionData),
+      body: exhibitionData,
     });
   }
 
@@ -221,62 +311,62 @@ class ApiService {
     });
   }
 
-  // Visitors (FIXED - handle pagination)
+  // Visitors
   async getVisitors() {
     const data = await this.request('/visitors/');
-    return data.results || data;
+    return this.extractResults(data);
   }
 
   async createVisitor(visitorData) {
     return this.request('/visitors/', {
       method: 'POST',
-      body: JSON.stringify(visitorData),
+      body: visitorData,
     });
   }
 
-  // Registrations (FIXED - handle pagination)
+  // Registrations
   async getRegistrations() {
     const data = await this.request('/registrations/');
-    return data.results || data;
+    return this.extractResults(data);
   }
 
   async registerForExhibition(registrationData) {
     return this.request('/registrations/', {
       method: 'POST',
-      body: JSON.stringify(registrationData),
+      body: registrationData,
     });
   }
 
   async updateRegistration(id, registrationData) {
     return this.request(`/registrations/${id}/`, {
       method: 'PUT',
-      body: JSON.stringify(registrationData),
+      body: registrationData,
     });
   }
 
-  // Clerks (Admin only) (FIXED - handle pagination)
+  // Clerks (Admin only)
   async getClerks() {
     const data = await this.request('/clerks/');
-    return data.results || data;
+    return this.extractResults(data);
   }
 
   async createClerk(clerkData) {
     return this.request('/clerks/', {
       method: 'POST',
-      body: JSON.stringify(clerkData),
+      body: clerkData,
     });
   }
 
-  // Setup Status (Clerk/Admin only) (FIXED - handle pagination)
+  // Setup Status (Clerk/Admin only)
   async getSetupStatuses() {
     const data = await this.request('/setupstatuses/');
-    return data.results || data;
+    return this.extractResults(data);
   }
 
   async updateSetupStatus(id, statusData) {
     return this.request(`/setupstatuses/${id}/`, {
       method: 'PUT',
-      body: JSON.stringify(statusData),
+      body: statusData,
     });
   }
 

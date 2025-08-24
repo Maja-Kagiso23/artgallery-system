@@ -8,6 +8,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework.decorators import action
+
 
 User = get_user_model()
 
@@ -106,17 +108,6 @@ class ArtPieceViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'description']
 
 
-class PublicExhibitionListView(generics.ListAPIView):
-    queryset = Exhibition.objects.filter(status__in=['ONGOING', 'UPCOMING'])
-    serializer_class = ExhibitionSerializer
-    permission_classes = [AllowAny]
-    
-    def get_queryset(self):
-        # Only show active exhibitions to public
-        return Exhibition.objects.filter(
-            status__in=['ONGOING', 'UPCOMING']
-        ).order_by('-start_date')
-
 class ExhibitionViewSet(viewsets.ModelViewSet):
     queryset = Exhibition.objects.all()
     serializer_class = ExhibitionSerializer
@@ -124,6 +115,41 @@ class ExhibitionViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['status']
     search_fields = ['title']
+    
+    def list(self, request, *args, **kwargs):
+        """Override to include art_pieces in the response"""
+        response = super().list(request, *args, **kwargs)
+        
+        # Add art_pieces to each exhibition
+        if hasattr(response.data, 'get') and 'results' in response.data:
+            # Paginated response
+            exhibitions = response.data['results']
+        else:
+            # Non-paginated response
+            exhibitions = response.data if isinstance(response.data, list) else [response.data]
+        
+        for exhibition_data in exhibitions:
+            if 'id' in exhibition_data:
+                exhibition_id = exhibition_data['id']
+                art_pieces = ArtPiece.objects.filter(
+                    exhibitionartpiece__exhibition_id=exhibition_id
+                )
+                exhibition_data['art_pieces'] = ArtPieceSerializer(art_pieces, many=True).data
+        
+        return response
+    
+    def retrieve(self, request, *args, **kwargs):
+        """Override to include art_pieces in single exhibition response"""
+        response = super().retrieve(request, *args, **kwargs)
+        
+        exhibition_id = response.data.get('id')
+        if exhibition_id:
+            art_pieces = ArtPiece.objects.filter(
+                exhibitionartpiece__exhibition_id=exhibition_id
+            )
+            response.data['art_pieces'] = ArtPieceSerializer(art_pieces, many=True).data
+        
+        return response
 
 
 class ExhibitionArtPieceViewSet(viewsets.ModelViewSet):
@@ -143,11 +169,192 @@ class VisitorViewSet(viewsets.ModelViewSet):
 
 
 class RegistrationViewSet(viewsets.ModelViewSet):
-    queryset = Registration.objects.all()
     serializer_class = RegistrationSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['visitor', 'exhibition', 'confirmed']
+    filterset_fields = ['visitor', 'exhibition', 'status', 'confirmed']
+    
+    def get_queryset(self):
+        user = self.request.user
+        user_role = getattr(user, 'role', 'visitor')
+
+        if user_role in ['clerk', 'admin']:
+            # Clerks and admins can see all registrations with related data
+            return Registration.objects.select_related('visitor', 'exhibition').order_by('-timestamp')
+        
+        try:
+            # Visitors only see their own registrations
+            visitor = Visitor.objects.get(email=user.email)
+            return Registration.objects.filter(visitor=visitor).select_related('visitor', 'exhibition').order_by('-timestamp')
+        except Visitor.DoesNotExist:
+            return Registration.objects.none()
+    
+    @action(detail=False, methods=['get'])
+    def my(self, request):
+        """Get current user's registrations"""
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def approve(self, request, pk=None):
+        """Approve a registration (clerk/admin only)"""
+        user_role = getattr(request.user, 'role', 'visitor')
+        if user_role not in ['clerk', 'admin']:
+            return Response(
+                {'error': 'Only clerks and admins can approve registrations'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            registration = self.get_object()
+            if registration.status != 'PENDING':
+                return Response(
+                    {'error': f'Cannot approve registration with status: {registration.status}'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            registration.approve(request.user)
+            
+            return Response({
+                'message': 'Registration approved successfully',
+                'registration_id': registration.id,
+                'visitor': registration.visitor.name,
+                'exhibition': registration.exhibition.title
+            })
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to approve registration: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def reject(self, request, pk=None):
+        """Reject a registration (clerk/admin only)"""
+        user_role = getattr(request.user, 'role', 'visitor')
+        if user_role not in ['clerk', 'admin']:
+            return Response(
+                {'error': 'Only clerks and admins can reject registrations'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            registration = self.get_object()
+            if registration.status != 'PENDING':
+                return Response(
+                    {'error': f'Cannot reject registration with status: {registration.status}'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            reason = request.data.get('reason', '')
+            registration.reject(request.user, reason)
+            
+            return Response({
+                'message': 'Registration rejected successfully',
+                'registration_id': registration.id,
+                'visitor': registration.visitor.name,
+                'exhibition': registration.exhibition.title,
+                'reason': reason
+            })
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to reject registration: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def queue_status(self, request):
+        """Get current user's queue status"""
+        try:
+            visitor = Visitor.objects.get(email=request.user.email)
+            pending_registrations = Registration.objects.filter(
+                visitor=visitor,
+                status='PENDING'
+            ).select_related('exhibition').order_by('queue_position')
+            
+            queue_info = []
+            for reg in pending_registrations:
+                queue_info.append({
+                    'registration_id': reg.id,
+                    'exhibition_title': reg.exhibition.title,
+                    'queue_position': reg.queue_position,
+                    'submitted_at': reg.submitted_at or reg.timestamp,
+                    'estimated_wait': f"{max(1, reg.queue_position or 1)} day(s)",
+                    'attendees_count': reg.attendees_count
+                })
+            
+            return Response({
+                'pending_registrations': queue_info,
+                'total_in_queue': len(queue_info)
+            })
+            
+        except Visitor.DoesNotExist:
+            return Response({'pending_registrations': [], 'total_in_queue': 0})
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to get queue status: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def create(self, request, *args, **kwargs):
+        """Handle registration creation with queue system"""
+        try:
+            exhibition_id = request.data.get('exhibition_id')
+            
+            if not exhibition_id and 'exhibition' in request.data:
+                exhibition_data = request.data.get('exhibition')
+                if isinstance(exhibition_data, dict) and 'id' in exhibition_data:
+                    exhibition_id = exhibition_data['id']
+            
+            if not exhibition_id:
+                return Response(
+                    {'error': 'exhibition_id is required'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            try:
+                exhibition = Exhibition.objects.get(id=exhibition_id)
+            except Exhibition.DoesNotExist:
+                return Response(
+                    {'error': 'Exhibition not found'}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            visitor, created = Visitor.objects.get_or_create(
+                email=request.user.email,
+                defaults={
+                    'name': f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username,
+                    'phone': getattr(request.user, 'phone', '')
+                }
+            )
+            
+            existing_registration = Registration.objects.filter(
+                visitor=visitor, exhibition=exhibition
+            ).first()
+            
+            if existing_registration:
+                return Response(
+                    {'error': 'Already registered for this exhibition'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            attendees_count = request.data.get('attendees_count', 1)
+            registration = Registration.objects.create(
+                visitor=visitor,
+                exhibition=exhibition,
+                attendees_count=attendees_count,
+                status='PENDING',
+                confirmed=False
+            )
+            
+            serializer = self.get_serializer(registration)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to create registration: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class ClerkViewSet(viewsets.ModelViewSet):
@@ -207,13 +414,8 @@ class UserListView(generics.ListAPIView):
     search_fields = ['username', 'email', 'first_name', 'last_name']
     filterset_fields = ['role', 'is_active']
     
-    def get_queryset(self):
-        # Only admins can see all users
-        if getattr(self.request.user, 'role', None) == 'admin':
-            return User.objects.all()
-        else:
-            # Regular users can only see their own profile
-            return User.objects.filter(id=self.request.user.id)
+
+
 
 # ---------------------------
 # Dashboard Views
@@ -225,21 +427,23 @@ class DashboardStatsView(APIView):
     def get(self, request):
         user_role = getattr(request.user, 'role', 'visitor')
         
+        # Base stats that match frontend expectations
         stats = {
             'total_artists': Artist.objects.count(),
-            'total_artpieces': ArtPiece.objects.count(),
             'total_exhibitions': Exhibition.objects.count(),
+            'total_visitors': Visitor.objects.count(),  # Frontend expects this
+            'total_artpieces': ArtPiece.objects.count(),
             'ongoing_exhibitions': Exhibition.objects.filter(status='ONGOING').count(),
             'upcoming_exhibitions': Exhibition.objects.filter(status='UPCOMING').count(),
         }
         
-        # Add role-specific stats
+        # Add role-specific stats (updated for queue system)
         if user_role in ['clerk', 'admin']:
             stats.update({
-                'total_visitors': Visitor.objects.count(),
                 'total_registrations': Registration.objects.count(),
-                'pending_registrations': Registration.objects.filter(confirmed=False).count(),
-                'confirmed_registrations': Registration.objects.filter(confirmed=True).count(),
+                'pending_registrations': Registration.objects.filter(status='PENDING').count(),  # Updated
+                'confirmed_registrations': Registration.objects.filter(status='APPROVED').count(),  # Updated
+                'rejected_registrations': Registration.objects.filter(status='REJECTED').count(),  # New
             })
             
         if user_role == 'admin':
@@ -266,14 +470,17 @@ class ExhibitionDetailView(generics.RetrieveAPIView):
         serializer = self.get_serializer(exhibition)
         data = serializer.data
         
-        # Add related data
+        # Add related data (updated for queue system)
         data['art_pieces'] = ArtPieceSerializer(
             ArtPiece.objects.filter(exhibitionartpiece__exhibition=exhibition),
             many=True
         ).data
         data['registrations_count'] = Registration.objects.filter(exhibition=exhibition).count()
         data['confirmed_registrations_count'] = Registration.objects.filter(
-            exhibition=exhibition, confirmed=True
+            exhibition=exhibition, status='APPROVED'  # Updated
+        ).count()
+        data['pending_registrations_count'] = Registration.objects.filter(
+            exhibition=exhibition, status='PENDING'  # New
         ).count()
         
         return Response(data)
@@ -310,13 +517,14 @@ class ExhibitionRegistrationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Create registration
+        # Create registration (updated for queue system)
         attendees_count = request.data.get('attendees_count', 1)
         registration = Registration.objects.create(
             visitor=visitor,
             exhibition=exhibition,
             attendees_count=attendees_count,
-            confirmed=False  # Clerk needs to confirm
+            status='PENDING',  # New registrations go to pending
+            confirmed=False    # Keep for backward compatibility
         )
         
         return Response(

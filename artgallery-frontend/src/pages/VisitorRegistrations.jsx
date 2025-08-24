@@ -6,6 +6,7 @@ const VisitorRegistrations = () => {
   const { user } = useAuth();
   const [exhibitions, setExhibitions] = useState([]);
   const [registrations, setRegistrations] = useState([]);
+  const [queueStatus, setQueueStatus] = useState({ pending_registrations: [], total_in_queue: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('AVAILABLE');
@@ -24,22 +25,52 @@ const VisitorRegistrations = () => {
       setLoading(true);
       setError(null);
       
-      // Fetch both exhibitions and user registrations
-      const [exhibitionsData, registrationsData] = await Promise.all([
-        ApiService.request('/exhibitions/'),
-        ApiService.request('/registrations/my/')
-      ]);
+      console.log("🔄 Fetching visitor registration data...");
       
-      // Handle DRF paginated response
+      // Fetch exhibitions, registrations, and queue status with better error handling
+      const fetchPromises = [
+        ApiService.request('/exhibitions/').catch(err => {
+          console.error("Failed to fetch exhibitions:", err);
+          return { results: [], count: 0 };
+        }),
+        ApiService.request('/registrations/my/').catch(err => {
+          console.error("Failed to fetch my registrations:", err);
+          return { results: [], count: 0 };
+        }),
+        ApiService.request('/registrations/queue_status/').catch(err => {
+          console.warn("Queue status not available:", err);
+          return { pending_registrations: [], total_in_queue: 0 };
+        })
+      ];
+      
+      const [exhibitionsData, registrationsData, queueData] = await Promise.all(fetchPromises);
+      
+      console.log("📊 Raw data received:");
+      console.log("- Exhibitions:", exhibitionsData);
+      console.log("- Registrations:", registrationsData);
+      console.log("- Queue Status:", queueData);
+      
+      // Handle DRF paginated response or direct array
       const exhibitionsArray = exhibitionsData.results || exhibitionsData;
       const registrationsArray = registrationsData.results || registrationsData;
       
-      setExhibitions(Array.isArray(exhibitionsArray) ? exhibitionsArray : []);
-      setRegistrations(Array.isArray(registrationsArray) ? registrationsArray : []);
+      // Ensure we have arrays
+      const finalExhibitions = Array.isArray(exhibitionsArray) ? exhibitionsArray : [];
+      const finalRegistrations = Array.isArray(registrationsArray) ? registrationsArray : [];
+      const finalQueueStatus = queueData || { pending_registrations: [], total_in_queue: 0 };
+      
+      console.log("✅ Processed data:");
+      console.log("- Exhibitions count:", finalExhibitions.length);
+      console.log("- Registrations count:", finalRegistrations.length);
+      console.log("- Queue total:", finalQueueStatus.total_in_queue);
+      
+      setExhibitions(finalExhibitions);
+      setRegistrations(finalRegistrations);
+      setQueueStatus(finalQueueStatus);
       
     } catch (error) {
-      console.error('Error fetching data:', error);
-      setError(error.message);
+      console.error('❌ Error fetching data:', error);
+      setError(`Failed to load data: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -62,10 +93,14 @@ const VisitorRegistrations = () => {
         attendees_count: attendeesCount
       };
       
+      console.log("📝 Submitting registration:", registrationData);
+      
       const response = await ApiService.request('/registrations/', {
         method: 'POST',
         body: JSON.stringify(registrationData)
       });
+      
+      console.log("✅ Registration response:", response);
       
       // Refresh data to show new registration
       await fetchData();
@@ -73,12 +108,92 @@ const VisitorRegistrations = () => {
       setShowRegistrationModal(false);
       setSelectedExhibition(null);
       
-      // Show success message
-      alert(`Successfully registered for "${selectedExhibition.title}" with ${attendeesCount} attendee${attendeesCount !== 1 ? 's' : ''}!`);
+      // Show queue position message
+      const queuePosition = response.queue_position || 'Unknown';
+      alert(
+        `Successfully registered for "${selectedExhibition.title}" with ${attendeesCount} attendee${attendeesCount !== 1 ? 's' : ''}!\n\n` +
+        `Your registration is now in the queue at position ${queuePosition}. ` +
+        `Please wait for clerk approval before your registration is confirmed.`
+      );
       
     } catch (error) {
-      console.error('Registration failed:', error);
-      alert(`Registration failed: ${error.message}`);
+      console.error('❌ Registration failed:', error);
+      
+      // Handle specific error cases
+      let errorMessage = 'Registration failed';
+      
+      if (error.response) {
+        const status = error.response.status;
+        const responseData = error.response.data;
+        
+        console.log('🔍 Error response details:', { status, data: responseData });
+        
+        if (status === 400) {
+          // Check for duplicate registration error
+          if (responseData && (
+            (typeof responseData === 'string' && responseData.toLowerCase().includes('already registered')) ||
+            (responseData.detail && responseData.detail.toLowerCase().includes('already registered')) ||
+            (responseData.error && responseData.error.toLowerCase().includes('already registered')) ||
+            (responseData.message && responseData.message.toLowerCase().includes('already registered')) ||
+            (responseData.non_field_errors && responseData.non_field_errors.some(msg => 
+              msg.toLowerCase().includes('already registered') || 
+              msg.toLowerCase().includes('duplicate') || 
+              msg.toLowerCase().includes('already applied')
+            ))
+          )) {
+            errorMessage = `You have already registered for "${selectedExhibition.title}". Please check your registrations list.`;
+          } else if (responseData && (
+            (responseData.detail && responseData.detail.toLowerCase().includes('exhibition is full')) ||
+            (responseData.error && responseData.error.toLowerCase().includes('exhibition is full')) ||
+            (responseData.message && responseData.message.toLowerCase().includes('exhibition is full'))
+          )) {
+            errorMessage = `Sorry, "${selectedExhibition.title}" is currently full. You can try registering later if spots become available.`;
+          } else {
+            // Generic 400 error
+            const detailMessage = responseData?.detail || responseData?.error || responseData?.message;
+            errorMessage = detailMessage ? `Registration failed: ${detailMessage}` : 'Invalid registration data. Please check your information and try again.';
+          }
+        } else if (status === 401) {
+          errorMessage = 'You must be logged in to register for exhibitions.';
+        } else if (status === 403) {
+          errorMessage = 'You do not have permission to register for this exhibition.';
+        } else if (status === 404) {
+          errorMessage = 'Exhibition not found. It may have been removed or is no longer available.';
+        } else if (status === 500) {
+          // Check if it's a duplicate registration causing the 500 error
+          if (responseData && (
+            (typeof responseData === 'string' && (
+              responseData.toLowerCase().includes('already registered') ||
+              responseData.toLowerCase().includes('duplicate') ||
+              responseData.toLowerCase().includes('unique constraint')
+            )) ||
+            (responseData.detail && (
+              responseData.detail.toLowerCase().includes('already registered') ||
+              responseData.detail.toLowerCase().includes('duplicate') ||
+              responseData.detail.toLowerCase().includes('unique constraint')
+            ))
+          )) {
+            errorMessage = `You have already registered for "${selectedExhibition.title}". Please check your registrations list.`;
+          } else {
+            errorMessage = 'Server error occurred. Please try again later or contact support if the problem persists.';
+          }
+        } else {
+          errorMessage = `Registration failed with error ${status}. Please try again.`;
+        }
+      } else if (error.request) {
+        errorMessage = 'Unable to connect to the server. Please check your internet connection and try again.';
+      } else {
+        errorMessage = `Registration failed: ${error.message}`;
+      }
+      
+      alert(errorMessage);
+      
+      // If it's a duplicate registration, close the modal and refresh data
+      if (errorMessage.toLowerCase().includes('already registered')) {
+        setShowRegistrationModal(false);
+        setSelectedExhibition(null);
+        await fetchData(); // Refresh to show the existing registration
+      }
     } finally {
       setRegistrationLoading(false);
     }
@@ -88,16 +203,20 @@ const VisitorRegistrations = () => {
     if (!confirm('Are you sure you want to cancel this registration?')) return;
     
     try {
+      console.log("🗑️ Cancelling registration:", registrationId);
+      
       await ApiService.request(`/registrations/${registrationId}/`, {
         method: 'DELETE'
       });
+      
+      console.log("✅ Registration cancelled successfully");
       
       // Refresh data
       await fetchData();
       alert('Registration cancelled successfully!');
       
     } catch (error) {
-      console.error('Cancellation failed:', error);
+      console.error('❌ Cancellation failed:', error);
       alert(`Cancellation failed: ${error.message}`);
     }
   };
@@ -133,7 +252,7 @@ const VisitorRegistrations = () => {
     }
   };
 
-  const getRegistrationBadgeStyle = (confirmed) => {
+  const getRegistrationBadgeStyle = (registration) => {
     const baseStyle = {
       padding: '0.3rem 0.8rem',
       borderRadius: '15px',
@@ -143,17 +262,54 @@ const VisitorRegistrations = () => {
       letterSpacing: '0.5px'
     };
 
-    return confirmed
-      ? { ...baseStyle, backgroundColor: '#e8f5e8', color: '#2e7d32' }
-      : { ...baseStyle, backgroundColor: '#fff3cd', color: '#856404' };
+    // Use the new status field if available, fallback to confirmed
+    const status = registration.status || (registration.confirmed ? 'APPROVED' : 'PENDING');
+    
+    switch (status) {
+      case 'APPROVED':
+        return { ...baseStyle, backgroundColor: '#e8f5e8', color: '#2e7d32' };
+      case 'PENDING':
+        return { ...baseStyle, backgroundColor: '#fff3cd', color: '#856404' };
+      case 'REJECTED':
+        return { ...baseStyle, backgroundColor: '#ffebee', color: '#d32f2f' };
+      case 'CANCELLED':
+        return { ...baseStyle, backgroundColor: '#f5f5f5', color: '#666' };
+      default:
+        return { ...baseStyle, backgroundColor: '#f5f5f5', color: '#666' };
+    }
+  };
+
+  const getRegistrationStatusText = (registration) => {
+    const status = registration.status || (registration.confirmed ? 'APPROVED' : 'PENDING');
+    
+    switch (status) {
+      case 'APPROVED':
+        return 'Approved';
+      case 'PENDING':
+        return `Pending (Position: ${registration.queue_position || 'Unknown'})`;
+      case 'REJECTED':
+        return 'Rejected';
+      case 'CANCELLED':
+        return 'Cancelled';
+      default:
+        return registration.confirmed ? 'Confirmed' : 'Pending';
+    }
   };
 
   const isRegisteredForExhibition = (exhibitionId) => {
-    return registrations.some(reg => reg.exhibition && reg.exhibition.id === exhibitionId);
+    return registrations.some(reg => {
+      // Handle different API response structures
+      const regExhibitionId = reg.exhibition?.id || reg.exhibition_id;
+      return regExhibitionId === exhibitionId;
+    });
   };
 
   const getRegistrationForExhibition = (exhibitionId) => {
-    return registrations.find(reg => reg.exhibition && reg.exhibition.id === exhibitionId);
+    return registrations.find(reg => {
+      // Handle different API response structures
+      const regExhibitionId = reg.exhibition?.id || reg.exhibition_id;
+      return regExhibitionId === exhibitionId;
+    });
   };
 
   const canRegisterForExhibition = (exhibition) => {
@@ -168,6 +324,21 @@ const VisitorRegistrations = () => {
       filtered = filtered.filter(ex => ex.status === 'UPCOMING');
     } else if (filter === 'REGISTERED') {
       filtered = filtered.filter(ex => isRegisteredForExhibition(ex.id));
+    } else if (filter === 'APPROVED') {
+      filtered = filtered.filter(ex => {
+        const reg = getRegistrationForExhibition(ex.id);
+        return reg && (reg.status === 'APPROVED' || reg.confirmed);
+      });
+    } else if (filter === 'PENDING') {
+      filtered = filtered.filter(ex => {
+        const reg = getRegistrationForExhibition(ex.id);
+        return reg && reg.status === 'PENDING' && !reg.confirmed;
+      });
+    } else if (filter === 'REJECTED') {
+      filtered = filtered.filter(ex => {
+        const reg = getRegistrationForExhibition(ex.id);
+        return reg && reg.status === 'REJECTED';
+      });
     } else if (filter !== 'ALL') {
       filtered = filtered.filter(ex => ex.status === filter);
     }
@@ -175,7 +346,8 @@ const VisitorRegistrations = () => {
     // Apply search filter
     if (searchTerm) {
       filtered = filtered.filter(ex => 
-        ex.title.toLowerCase().includes(searchTerm.toLowerCase())
+        ex.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (ex.description && ex.description.toLowerCase().includes(searchTerm.toLowerCase()))
       );
     }
 
@@ -183,6 +355,16 @@ const VisitorRegistrations = () => {
   };
 
   const filteredExhibitions = getFilteredExhibitions();
+
+  // Calculate stats for better UX
+  const stats = {
+    total: exhibitions.length,
+    available: exhibitions.filter(ex => ex.status === 'UPCOMING' && !isRegisteredForExhibition(ex.id)).length,
+    registered: registrations.length,
+    approved: registrations.filter(reg => reg.status === 'APPROVED' || reg.confirmed).length,
+    pending: registrations.filter(reg => reg.status === 'PENDING' || (!reg.confirmed && reg.status !== 'REJECTED')).length,
+    rejected: registrations.filter(reg => reg.status === 'REJECTED').length
+  };
 
   if (loading) {
     return (
@@ -237,6 +419,81 @@ const VisitorRegistrations = () => {
           </p>
         </div>
 
+        {/* Stats Overview */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+          gap: '1rem',
+          marginBottom: '2rem'
+        }}>
+          {[
+            { key: 'available', label: 'Available', count: stats.available, color: '#10b981' },
+            { key: 'registered', label: 'Registered', count: stats.registered, color: '#3b82f6' },
+            { key: 'approved', label: 'Approved', count: stats.approved, color: '#059669' },
+            { key: 'pending', label: 'Pending', count: stats.pending, color: '#f59e0b' },
+            { key: 'rejected', label: 'Rejected', count: stats.rejected, color: '#dc2626' }
+          ].map(stat => (
+            <div 
+              key={stat.key}
+              onClick={() => setFilter(stat.key.toUpperCase())}
+              style={{
+                backgroundColor: 'white',
+                padding: '1.5rem',
+                borderRadius: '12px',
+                boxShadow: '0 4px 6px rgba(0,0,0,0.07)',
+                textAlign: 'center',
+                cursor: 'pointer',
+                border: filter === stat.key.toUpperCase() ? '3px solid #3b82f6' : '2px solid #e2e8f0',
+                transition: 'all 0.3s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.transform = 'translateY(-2px)';
+                e.target.style.boxShadow = '0 8px 20px rgba(0,0,0,0.15)';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.transform = 'translateY(0)';
+                e.target.style.boxShadow = '0 4px 6px rgba(0,0,0,0.07)';
+              }}
+            >
+              <h3 style={{ 
+                fontSize: '2rem', 
+                fontWeight: '700', 
+                color: stat.color,
+                marginBottom: '0.5rem'
+              }}>
+                {stat.count}
+              </h3>
+              <p style={{ 
+                fontSize: '0.9rem', 
+                color: '#64748b', 
+                fontWeight: '600'
+              }}>
+                {stat.label}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        {/* Queue Status Alert */}
+        {queueStatus.total_in_queue > 0 && (
+          <div style={{
+            backgroundColor: '#fef3c7',
+            color: '#92400e',
+            padding: '1rem 1.5rem',
+            borderRadius: '8px',
+            marginBottom: '2rem',
+            border: '1px solid #fcd34d'
+          }}>
+            <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', fontWeight: '600' }}>
+              Queue Status Update
+            </h3>
+            <p style={{ margin: 0 }}>
+              You have {queueStatus.total_in_queue} registration{queueStatus.total_in_queue !== 1 ? 's' : ''} 
+              pending approval. Your registrations will be reviewed by our staff in order.
+            </p>
+          </div>
+        )}
+
         {/* Filters Section */}
         <div style={{
           backgroundColor: 'white',
@@ -251,7 +508,7 @@ const VisitorRegistrations = () => {
           justifyContent: 'space-between'
         }}>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            {['ALL', 'AVAILABLE', 'REGISTERED', 'ONGOING', 'COMPLETED'].map(status => (
+            {['ALL', 'AVAILABLE', 'REGISTERED', 'APPROVED', 'PENDING', 'REJECTED', 'ONGOING', 'COMPLETED'].map(status => (
               <button
                 key={status}
                 onClick={() => setFilter(status)}
@@ -269,7 +526,10 @@ const VisitorRegistrations = () => {
               >
                 {status === 'ALL' ? 'All Exhibitions' : 
                  status === 'AVAILABLE' ? 'Available to Register' :
-                 status === 'REGISTERED' ? 'My Registrations' : status}
+                 status === 'REGISTERED' ? 'My Registrations' : 
+                 status === 'APPROVED' ? 'Approved' :
+                 status === 'PENDING' ? 'Pending Approval' :
+                 status === 'REJECTED' ? 'Rejected' : status}
               </button>
             ))}
           </div>
@@ -339,6 +599,9 @@ const VisitorRegistrations = () => {
                 `No exhibitions found matching "${searchTerm}"` : 
                 filter === 'REGISTERED' ? 'You have no registrations yet' :
                 filter === 'AVAILABLE' ? 'No exhibitions available for registration' :
+                filter === 'APPROVED' ? 'No approved registrations' :
+                filter === 'PENDING' ? 'No pending registrations' :
+                filter === 'REJECTED' ? 'No rejected registrations' :
                 `No ${filter === 'ALL' ? '' : filter.toLowerCase()} exhibitions available`
               }
             </p>
@@ -400,7 +663,11 @@ const VisitorRegistrations = () => {
                   {/* Exhibition Header */}
                   <div style={{
                     background: isRegistered 
-                      ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                      ? registration?.status === 'REJECTED' 
+                        ? 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)'
+                        : registration?.status === 'APPROVED' || registration?.confirmed
+                          ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                          : 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
                       : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                     padding: '2rem',
                     color: 'white',
@@ -419,8 +686,8 @@ const VisitorRegistrations = () => {
                         {exhibition.status}
                       </span>
                       {isRegistered && (
-                        <span style={getRegistrationBadgeStyle(registration.confirmed)}>
-                          {registration.confirmed ? 'Confirmed' : 'Pending'}
+                        <span style={getRegistrationBadgeStyle(registration)}>
+                          {getRegistrationStatusText(registration)}
                         </span>
                       )}
                     </div>
@@ -436,13 +703,38 @@ const VisitorRegistrations = () => {
                     </h3>
                     
                     {isRegistered && (
-                      <p style={{
-                        fontSize: '0.95rem',
-                        opacity: '0.9',
-                        fontWeight: '500'
-                      }}>
-                        Registered for {registration.attendees_count} attendee{registration.attendees_count !== 1 ? 's' : ''}
-                      </p>
+                      <div>
+                        <p style={{
+                          fontSize: '0.95rem',
+                          opacity: '0.9',
+                          fontWeight: '500',
+                          marginBottom: '0.25rem'
+                        }}>
+                          Registered for {registration.attendees_count} attendee{registration.attendees_count !== 1 ? 's' : ''}
+                        </p>
+                        {registration.status === 'PENDING' && registration.queue_position && (
+                          <p style={{
+                            fontSize: '0.85rem',
+                            opacity: '0.8',
+                            fontWeight: '400'
+                          }}>
+                            Queue Position: #{registration.queue_position}
+                          </p>
+                        )}
+                        {registration.status === 'REJECTED' && registration.rejection_reason && (
+                          <p style={{
+                            fontSize: '0.85rem',
+                            opacity: '0.9',
+                            fontWeight: '400',
+                            backgroundColor: 'rgba(255,255,255,0.2)',
+                            padding: '0.5rem',
+                            borderRadius: '4px',
+                            marginTop: '0.5rem'
+                          }}>
+                            Reason: {registration.rejection_reason}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
 
@@ -495,6 +787,25 @@ const VisitorRegistrations = () => {
                       </div>
                     </div>
 
+                    {exhibition.description && (
+                      <div style={{
+                        backgroundColor: '#f8fafc',
+                        padding: '1rem',
+                        borderRadius: '8px',
+                        marginBottom: '1.5rem'
+                      }}>
+                        <p style={{
+                          fontSize: '0.9rem',
+                          color: '#64748b',
+                          lineHeight: '1.5'
+                        }}>
+                          {exhibition.description.length > 150 
+                            ? `${exhibition.description.substring(0, 150)}...` 
+                            : exhibition.description}
+                        </p>
+                      </div>
+                    )}
+
                     {exhibition.art_pieces && exhibition.art_pieces.length > 0 && (
                       <div style={{
                         backgroundColor: '#f8fafc',
@@ -546,7 +857,7 @@ const VisitorRegistrations = () => {
                         </button>
                       )}
                       
-                      {isRegistered && (
+                      {isRegistered && registration.status !== 'APPROVED' && !registration.confirmed && (
                         <button
                           onClick={() => cancelRegistration(registration.id)}
                           style={{
@@ -588,6 +899,25 @@ const VisitorRegistrations = () => {
                            'Unavailable'}
                         </button>
                       )}
+                      
+                      {isRegistered && (registration.status === 'APPROVED' || registration.confirmed) && (
+                        <button
+                          disabled
+                          style={{
+                            flex: '1',
+                            padding: '0.875rem',
+                            backgroundColor: '#10b981',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '8px',
+                            fontSize: '1rem',
+                            fontWeight: '600',
+                            cursor: 'default'
+                          }}
+                        >
+                          ✅ Confirmed
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -613,6 +943,9 @@ const VisitorRegistrations = () => {
               Showing {filteredExhibitions.length} of {exhibitions.length} exhibitions
               {filter !== 'ALL' && ` (${filter === 'AVAILABLE' ? 'available to register' : 
                                        filter === 'REGISTERED' ? 'registered' : 
+                                       filter === 'APPROVED' ? 'approved registrations' :
+                                       filter === 'PENDING' ? 'pending approval' :
+                                       filter === 'REJECTED' ? 'rejected registrations' :
                                        `filtered by ${filter}`})`}
               {searchTerm && ` (matching "${searchTerm}")`}
             </p>
@@ -622,6 +955,9 @@ const VisitorRegistrations = () => {
               marginTop: '0.5rem'
             }}>
               You are registered for {registrations.length} exhibition{registrations.length !== 1 ? 's' : ''}
+              {queueStatus.total_in_queue > 0 && 
+                ` (${queueStatus.total_in_queue} pending approval)`
+              }
             </p>
           </div>
         )}
@@ -661,9 +997,51 @@ const VisitorRegistrations = () => {
             <p style={{ 
               fontSize: '1.1rem', 
               color: '#64748b', 
-              marginBottom: '1.5rem' 
+              marginBottom: '0.5rem' 
             }}>
               <strong>{selectedExhibition.title}</strong>
+            </p>
+            
+            <div style={{
+              backgroundColor: '#f0f9ff',
+              border: '1px solid #0ea5e9',
+              borderRadius: '8px',
+              padding: '1rem',
+              marginBottom: '1.5rem'
+            }}>
+              <h4 style={{
+                fontSize: '0.9rem',
+                fontWeight: '600',
+                color: '#0369a1',
+                marginBottom: '0.5rem'
+              }}>
+                📅 Exhibition Details
+              </h4>
+              <p style={{
+                fontSize: '0.85rem',
+                color: '#0c4a6e',
+                marginBottom: '0.25rem'
+              }}>
+                Start: {formatDate(selectedExhibition.start_date)}
+              </p>
+              <p style={{
+                fontSize: '0.85rem',
+                color: '#0c4a6e'
+              }}>
+                End: {formatDate(selectedExhibition.end_date)}
+              </p>
+            </div>
+            
+            <p style={{ 
+              fontSize: '0.9rem', 
+              color: '#f59e0b', 
+              marginBottom: '1.5rem',
+              padding: '0.5rem',
+              backgroundColor: '#fef3c7',
+              borderRadius: '4px',
+              border: '1px solid #fcd34d'
+            }}>
+              <strong>📝 Note:</strong> Your registration will be added to the queue and requires clerk approval before confirmation.
             </p>
             
             <div style={{ marginBottom: '1.5rem' }}>
@@ -687,9 +1065,19 @@ const VisitorRegistrations = () => {
                   padding: '0.75rem',
                   border: '2px solid #e2e8f0',
                   borderRadius: '8px',
-                  fontSize: '1rem'
+                  fontSize: '1rem',
+                  outline: 'none'
                 }}
+                onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
               />
+              <p style={{
+                fontSize: '0.8rem',
+                color: '#64748b',
+                marginTop: '0.25rem'
+              }}>
+                Maximum 10 attendees per registration
+              </p>
             </div>
             
             <div style={{ 
@@ -698,7 +1086,11 @@ const VisitorRegistrations = () => {
               justifyContent: 'flex-end' 
             }}>
               <button
-                onClick={() => setShowRegistrationModal(false)}
+                onClick={() => {
+                  setShowRegistrationModal(false);
+                  setSelectedExhibition(null);
+                  setAttendeesCount(1);
+                }}
                 disabled={registrationLoading}
                 style={{
                   padding: '0.75rem 1.5rem',
@@ -706,33 +1098,35 @@ const VisitorRegistrations = () => {
                   color: 'white',
                   border: 'none',
                   borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontWeight: '600'
+                  cursor: registrationLoading ? 'not-allowed' : 'pointer',
+                  fontWeight: '600',
+                  opacity: registrationLoading ? 0.5 : 1
                 }}
               >
                 Cancel
               </button>
               <button
                 onClick={submitRegistration}
-                disabled={registrationLoading}
+                disabled={registrationLoading || attendeesCount < 1 || attendeesCount > 10}
                 style={{
                   padding: '0.75rem 1.5rem',
-                  backgroundColor: '#10b981',
+                  backgroundColor: attendeesCount < 1 || attendeesCount > 10 ? '#9ca3af' : '#3b82f6',
                   color: 'white',
                   border: 'none',
                   borderRadius: '8px',
-                  cursor: registrationLoading ? 'not-allowed' : 'pointer',
+                  cursor: (registrationLoading || attendeesCount < 1 || attendeesCount > 10) ? 'not-allowed' : 'pointer',
                   fontWeight: '600',
                   opacity: registrationLoading ? 0.7 : 1
                 }}
               >
-                {registrationLoading ? 'Registering...' : 'Confirm Registration'}
+                {registrationLoading ? 'Processing...' : 'Confirm Registration'}
               </button>
             </div>
           </div>
         </div>
       )}
 
+      {/* CSS Animation */}
       <style>
         {`
           @keyframes spin {
@@ -746,3 +1140,4 @@ const VisitorRegistrations = () => {
 };
 
 export default VisitorRegistrations;
+                       

@@ -1,4 +1,8 @@
 from django.db import models
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+
+User = get_user_model()
 
 class Artist(models.Model):
     name = models.CharField(max_length=255)
@@ -6,7 +10,6 @@ class Artist(models.Model):
     phone = models.CharField(max_length=30, blank=True, null=True)
     nationality = models.CharField(max_length=100, blank=True, null=True)
     bio = models.TextField(blank=True, null=True)
-
 
     def __str__(self):
         return self.name
@@ -58,11 +61,135 @@ class Visitor(models.Model):
         return self.name
 
 class Registration(models.Model):
-    visitor = models.ForeignKey(Visitor, on_delete=models.CASCADE)
-    exhibition = models.ForeignKey(Exhibition, on_delete=models.CASCADE)
+    REGISTRATION_STATUS_CHOICES = [
+        ('PENDING', 'Pending Approval'),
+        ('APPROVED', 'Approved by Clerk'),
+        ('REJECTED', 'Rejected'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+    
+    visitor = models.ForeignKey('Visitor', on_delete=models.CASCADE)
+    exhibition = models.ForeignKey('Exhibition', on_delete=models.CASCADE)
     attendees_count = models.PositiveIntegerField(default=1)
+    
+    # Updated status system
+    status = models.CharField(
+        max_length=20, 
+        choices=REGISTRATION_STATUS_CHOICES, 
+        default='PENDING'
+    )
+    
+    # Keep the old 'confirmed' field for backwards compatibility
     confirmed = models.BooleanField(default=False)
+    
+    # Queue management
+    queue_position = models.PositiveIntegerField(null=True, blank=True)
+    submitted_at = models.DateTimeField(auto_now_add=True, null=True)
+    
+    # Keep the old timestamp field for backwards compatibility
     timestamp = models.DateTimeField(auto_now_add=True)
+    
+    # Clerk approval tracking
+    reviewed_by = models.ForeignKey(
+        User, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='reviewed_registrations'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    
+    # Notification flags
+    visitor_notified = models.BooleanField(default=False)
+    
+    class Meta:
+        unique_together = ['visitor', 'exhibition']
+        ordering = ['queue_position', 'submitted_at']
+    
+    def save(self, *args, **kwargs):
+        # Sync old confirmed field with new status field
+        if self.status == 'APPROVED':
+            self.confirmed = True
+        else:
+            self.confirmed = False
+            
+        # Auto-assign queue position for new registrations
+        if not self.pk and self.status == 'PENDING':
+            last_position = Registration.objects.filter(
+                exhibition=self.exhibition,
+                status='PENDING'
+            ).aggregate(
+                max_position=models.Max('queue_position')
+            )['max_position']
+            
+            self.queue_position = (last_position or 0) + 1
+            
+        super().save(*args, **kwargs)
+    
+    def approve(self, clerk_user):
+        """Approve the registration"""
+        self.status = 'APPROVED'
+        self.confirmed = True
+        self.reviewed_by = clerk_user
+        self.reviewed_at = timezone.now()
+        self.visitor_notified = False  # Reset to send approval notification
+        self.save()
+        
+        # Remove from queue and adjust positions
+        self._adjust_queue_positions()
+    
+    def reject(self, clerk_user, reason=""):
+        """Reject the registration"""
+        self.status = 'REJECTED'
+        self.confirmed = False
+        self.reviewed_by = clerk_user
+        self.reviewed_at = timezone.now()
+        self.rejection_reason = reason
+        self.visitor_notified = False  # Reset to send rejection notification
+        self.save()
+        
+        # Remove from queue and adjust positions
+        self._adjust_queue_positions()
+    
+    def cancel(self):
+        """Cancel the registration"""
+        self.status = 'CANCELLED'
+        self.confirmed = False
+        self.save()
+        
+        # Remove from queue and adjust positions
+        self._adjust_queue_positions()
+    
+    def _adjust_queue_positions(self):
+        """Adjust queue positions after approval/rejection"""
+        if self.queue_position:
+            # Move all pending registrations up in the queue
+            Registration.objects.filter(
+                exhibition=self.exhibition,
+                status='PENDING',
+                queue_position__gt=self.queue_position
+            ).update(queue_position=models.F('queue_position') - 1)
+            
+            self.queue_position = None
+            self.save(update_fields=['queue_position'])
+    
+    @property
+    def is_approved(self):
+        return self.status == 'APPROVED'
+    
+    @property
+    def is_pending(self):
+        return self.status == 'PENDING'
+    
+    @property
+    def days_waiting(self):
+        if self.status == 'PENDING' and self.submitted_at:
+            return (timezone.now() - self.submitted_at).days
+        return 0
+    
+    def __str__(self):
+        return f"{self.visitor.name} - {self.exhibition.title} ({self.status})"
 
 class Clerk(models.Model):
     name = models.CharField(max_length=255)

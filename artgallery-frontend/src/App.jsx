@@ -9,6 +9,8 @@ import ExhibitionManagement from './pages/ExhibitionManagement';
 import ArtPieceManagement from './pages/ArtPieceManagement'; 
 import ViewExhibitions from './pages/ViewExhibitions';
 import VisitorRegistrations from './pages/VisitorRegistrations';
+import ManageVisitors from './pages/ManageVisitors';
+import RegistrationManagement from './pages/RegistrationManagement'
 
 function App() {
   return (
@@ -58,16 +60,38 @@ function App() {
             } 
           />
 
+          {/* Manage Visitors - for both admin and clerk users */}
+          <Route 
+            path="/manage-visitors" 
+            element={
+              <ProtectedRoute requiredRole="clerk">
+                <ManageVisitors />
+              </ProtectedRoute>
+            } 
+          />
+
+          <Route 
+            path="/registrations" 
+            element={
+              <ProtectedRoute requiredRole="clerk">
+                <RegistrationManagement />
+              </ProtectedRoute>
+            } 
+          />
+		  
+		  
+          
           {/* Public exhibitions - visitors can access (this should come AFTER admin routes) */}
           <Route 
             path="/gallery" 
               element={<ViewExhibitions />}
           />
           
-                    <Route 
+          <Route 
             path="/my-registrations" 
               element={<VisitorRegistrations />}
           />
+          
           {/* Default redirect to dashboard if logged in, otherwise login */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           
