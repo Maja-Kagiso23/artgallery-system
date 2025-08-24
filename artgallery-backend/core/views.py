@@ -106,6 +106,17 @@ class ArtPieceViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'description']
 
 
+class PublicExhibitionListView(generics.ListAPIView):
+    queryset = Exhibition.objects.filter(status__in=['ONGOING', 'UPCOMING'])
+    serializer_class = ExhibitionSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        # Only show active exhibitions to public
+        return Exhibition.objects.filter(
+            status__in=['ONGOING', 'UPCOMING']
+        ).order_by('-start_date')
+
 class ExhibitionViewSet(viewsets.ModelViewSet):
     queryset = Exhibition.objects.all()
     serializer_class = ExhibitionSerializer

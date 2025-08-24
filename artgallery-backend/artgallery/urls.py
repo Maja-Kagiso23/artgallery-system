@@ -18,6 +18,7 @@ from core.views import (
     DashboardStatsView,
     ExhibitionDetailView,
     ExhibitionRegistrationView,
+    PublicExhibitionListView,
     MyRegistrationsView,
     ArtistDetailView,
     APIHealthCheckView
@@ -68,6 +69,9 @@ urlpatterns = [
     # Artist specific endpoints
     path('api/artists/<int:pk>/detail/', ArtistDetailView.as_view(), name='artist_detail'),
     
+    # visitor specific endpoints
+    # Add this to your urlpatterns
+    path('api/gallery/', PublicExhibitionListView.as_view(), name='public_gallery'),
     # Legacy endpoints (keep for backward compatibility)
     path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh_legacy'),

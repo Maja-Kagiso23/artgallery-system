@@ -8,6 +8,7 @@ import ArtistManagement from './pages/ArtistManagement';
 import ExhibitionManagement from './pages/ExhibitionManagement';
 import ArtPieceManagement from './pages/ArtPieceManagement'; 
 import ViewExhibitions from './pages/ViewExhibitions';
+import VisitorRegistrations from './pages/VisitorRegistrations';
 
 function App() {
   return (
@@ -36,16 +37,16 @@ function App() {
               </ProtectedRoute>
             } 
           />
-		  
-		{/* Exhibition Management - only for admin users */}
-		<Route 
-		  path="/exhibitions" 
-		  element={
-			<ProtectedRoute requiredRole="admin">
-			  <ExhibitionManagement />
-			</ProtectedRoute>
-		  } 
-		/>
+          
+          {/* Exhibition Management - only for admin users */}
+          <Route 
+            path="/exhibitions" 
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <ExhibitionManagement />
+              </ProtectedRoute>
+            } 
+          />
           
           {/* Art Piece Management - only for admin users */}
           <Route 
@@ -57,15 +58,16 @@ function App() {
             } 
           />
 
-
-
-		{/* Public exhibitions - visitors can access */}
-		<Route 
-		  path="/exhibitions" 
-		  element={<ViewExhibitions />} 
-		/>
-
-		  
+          {/* Public exhibitions - visitors can access (this should come AFTER admin routes) */}
+          <Route 
+            path="/gallery" 
+              element={<ViewExhibitions />}
+          />
+          
+                    <Route 
+            path="/my-registrations" 
+              element={<VisitorRegistrations />}
+          />
           {/* Default redirect to dashboard if logged in, otherwise login */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           

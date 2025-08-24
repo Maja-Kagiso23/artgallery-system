@@ -4,7 +4,8 @@ const ViewExhibitions = () => {
   const [exhibitions, setExhibitions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [debugInfo, setDebugInfo] = useState({});
+  const [filter, setFilter] = useState('ALL');
+  const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     fetchExhibitions();
@@ -15,89 +16,31 @@ const ViewExhibitions = () => {
       setLoading(true);
       setError(null);
       
-      // Debug: Check what's available in localStorage
-      const token = localStorage.getItem('token');
-      const user = localStorage.getItem('user');
+      const apiBaseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
       
-      setDebugInfo({
-        hasToken: !!token,
-        tokenPrefix: token ? token.substring(0, 20) + '...' : 'No token',
-        user: user ? JSON.parse(user) : 'No user data',
-        currentURL: window.location.href,
-        apiBaseURL: process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000'
+      const response = await fetch(`${apiBaseURL}/api/exhibitions/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
 
-      // Try different API endpoints to see which one works
-      const possibleEndpoints = [
-        '/api/exhibitions/',           // Standard DRF endpoint
-        '/api/exhibitions/public/',    // Custom public endpoint
-        '/api/public/exhibitions/',    // Alternative public endpoint
-        '/api/visitor/exhibitions/'    // Visitor-specific endpoint
-      ];
-
-      let response = null;
-      let usedEndpoint = '';
-
-      for (const endpoint of possibleEndpoints) {
-        try {
-          const baseURL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
-          const fullURL = `${baseURL}${endpoint}`;
-          
-          console.log(`Trying endpoint: ${fullURL}`);
-          
-          // Try without authentication first (for public access)
-          response = await fetch(fullURL, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          });
-
-          if (response.ok) {
-            usedEndpoint = endpoint;
-            console.log(`Success with endpoint: ${endpoint}`);
-            break;
-          } else {
-            console.log(`Failed with endpoint: ${endpoint}, Status: ${response.status}`);
-          }
-        } catch (endpointError) {
-          console.log(`Error with endpoint ${endpoint}:`, endpointError.message);
-        }
-      }
-
-      // If no public endpoint worked, try with authentication
-      if (!response || !response.ok) {
-        const baseURL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
-        const fullURL = `${baseURL}/api/exhibitions/`;
-        
-        console.log(`Trying authenticated request to: ${fullURL}`);
-        
-        response = await fetch(fullURL, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : '',
-          },
-        });
-        
-        usedEndpoint = '/api/exhibitions/ (authenticated)';
-      }
-
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HTTP ${response.status}: ${response.statusText}\n${errorText}`);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const data = await response.json();
-      console.log('Exhibition data received:', data);
       
-      setExhibitions(Array.isArray(data) ? data : data.results || []);
-      setDebugInfo(prev => ({
-        ...prev,
-        usedEndpoint,
-        responseStatus: response.status,
-        dataReceived: data
-      }));
+      // Handle DRF paginated response like in ExhibitionManagement
+      const exhibitionsData = data.results || data;
+      
+    
+      if (!Array.isArray(exhibitionsData)) {
+        console.warn('Expected array but got:', exhibitionsData);
+        setExhibitions([]);
+      } else {
+        setExhibitions(exhibitionsData);
+      }
       
     } catch (error) {
       console.error('Error fetching exhibitions:', error);
@@ -107,86 +50,434 @@ const ViewExhibitions = () => {
     }
   };
 
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Not set';
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  const getStatusBadgeStyle = (status) => {
+    const baseStyle = {
+      padding: '0.5rem 1rem',
+      borderRadius: '20px',
+      fontSize: '0.85rem',
+      fontWeight: '600',
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px'
+    };
+
+    switch (status) {
+      case 'UPCOMING':
+        return { ...baseStyle, backgroundColor: '#e3f2fd', color: '#1976d2' };
+      case 'ONGOING':
+        return { ...baseStyle, backgroundColor: '#e8f5e8', color: '#2e7d32' };
+      case 'COMPLETED':
+        return { ...baseStyle, backgroundColor: '#fce4ec', color: '#c2185b' };
+      default:
+        return { ...baseStyle, backgroundColor: '#f5f5f5', color: '#666' };
+    }
+  };
+
+  const getDaysRemaining = (startDate, endDate, status) => {
+    const now = new Date();
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (status === 'UPCOMING') {
+      const daysToStart = Math.ceil((start - now) / (1000 * 60 * 60 * 24));
+      return daysToStart > 0 ? `Starts in ${daysToStart} days` : 'Starting soon';
+    } else if (status === 'ONGOING') {
+      const daysToEnd = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+      return daysToEnd > 0 ? `${daysToEnd} days remaining` : 'Ending soon';
+    } else {
+      return 'Exhibition completed';
+    }
+  };
+
+  const filteredExhibitions = exhibitions.filter(exhibition => {
+    const matchesFilter = filter === 'ALL' || exhibition.status === filter;
+    const matchesSearch = exhibition.title.toLowerCase().includes(searchTerm.toLowerCase());
+    return matchesFilter && matchesSearch;
+  });
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading exhibitions...</p>
+      <div style={{ 
+        minHeight: '100vh', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center',
+        backgroundColor: '#f8fafc'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            width: '50px',
+            height: '50px',
+            border: '4px solid #e2e8f0',
+            borderTop: '4px solid #3b82f6',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+            margin: '0 auto 1rem'
+          }}></div>
+          <p style={{ color: '#64748b', fontSize: '1.1rem' }}>Loading exhibitions...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-6xl mx-auto px-4">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Art Exhibitions</h1>
-          <p className="text-gray-600">Discover amazing art exhibitions</p>
+    <div style={{ 
+      minHeight: '100vh', 
+      backgroundColor: '#f8fafc', 
+      padding: '2rem 1rem' 
+    }}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+        {/* Header Section */}
+        <div style={{ marginBottom: '3rem', textAlign: 'center' }}>
+          <h1 style={{ 
+            fontSize: '3rem', 
+            fontWeight: '700', 
+            color: '#1e293b', 
+            marginBottom: '1rem',
+            letterSpacing: '-0.025em'
+          }}>
+            Art Exhibitions
+          </h1>
+          <p style={{ 
+            fontSize: '1.2rem', 
+            color: '#64748b', 
+            maxWidth: '600px', 
+            margin: '0 auto' 
+          }}>
+            Discover amazing art exhibitions featuring works from talented artists around the world
+          </p>
         </div>
 
-        {/* Debug Information Panel */}
-        <div className="mb-8 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <h2 className="text-lg font-semibold text-yellow-800 mb-3">Debug Information</h2>
-          <div className="space-y-2 text-sm">
-            <p><strong>Has Token:</strong> {debugInfo.hasToken ? 'Yes' : 'No'}</p>
-            <p><strong>Token Preview:</strong> {debugInfo.tokenPrefix}</p>
-            <p><strong>User Data:</strong> {JSON.stringify(debugInfo.user)}</p>
-            <p><strong>Current URL:</strong> {debugInfo.currentURL}</p>
-            <p><strong>API Base URL:</strong> {debugInfo.apiBaseURL}</p>
-            <p><strong>Used Endpoint:</strong> {debugInfo.usedEndpoint}</p>
-            <p><strong>Response Status:</strong> {debugInfo.responseStatus}</p>
+        {/* Filters Section */}
+        <div style={{
+          backgroundColor: 'white',
+          padding: '1.5rem',
+          borderRadius: '12px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+          marginBottom: '2rem',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '1rem',
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }}>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {['ALL', 'ONGOING', 'UPCOMING', 'COMPLETED'].map(status => (
+              <button
+                key={status}
+                onClick={() => setFilter(status)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  border: '2px solid',
+                  borderColor: filter === status ? '#3b82f6' : '#e2e8f0',
+                  backgroundColor: filter === status ? '#3b82f6' : 'white',
+                  color: filter === status ? 'white' : '#64748b',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: '600',
+                  transition: 'all 0.2s'
+                }}
+              >
+                {status === 'ALL' ? 'All Exhibitions' : status}
+              </button>
+            ))}
           </div>
+          
+          <input
+            type="text"
+            placeholder="Search exhibitions..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              padding: '0.75rem 1rem',
+              border: '2px solid #e2e8f0',
+              borderRadius: '8px',
+              fontSize: '1rem',
+              minWidth: '250px',
+              outline: 'none'
+            }}
+            onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+            onBlur={(e) => e.target.style.borderColor = '#e2e8f0'}
+          />
         </div>
 
+        {/* Error Message */}
         {error && (
-          <div className="mb-8 bg-red-50 border border-red-200 rounded-lg p-4">
-            <h2 className="text-lg font-semibold text-red-800 mb-2">Error Details</h2>
-            <pre className="text-sm text-red-700 whitespace-pre-wrap">{error}</pre>
+          <div style={{
+            backgroundColor: '#fef2f2',
+            color: '#dc2626',
+            padding: '1rem',
+            borderRadius: '8px',
+            marginBottom: '2rem',
+            border: '1px solid #fecaca',
+            textAlign: 'center'
+          }}>
+            <strong>Error:</strong> {error}
             <button
               onClick={fetchExhibitions}
-              className="mt-3 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+              style={{
+                marginLeft: '1rem',
+                padding: '0.5rem 1rem',
+                backgroundColor: '#dc2626',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
             >
               Retry
             </button>
           </div>
         )}
 
-        {exhibitions.length === 0 && !error && (
-          <div className="text-center py-12">
-            <p className="text-gray-500 text-lg">No exhibitions available at the moment.</p>
+        {/* No Results Message */}
+        {filteredExhibitions.length === 0 && !error && (
+          <div style={{
+            backgroundColor: 'white',
+            padding: '4rem 2rem',
+            borderRadius: '12px',
+            textAlign: 'center',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
+            <p style={{ 
+              fontSize: '1.2rem', 
+              color: '#64748b', 
+              marginBottom: '1rem' 
+            }}>
+              {searchTerm ? 
+                `No exhibitions found matching "${searchTerm}"` : 
+                `No ${filter === 'ALL' ? '' : filter.toLowerCase()} exhibitions available`
+              }
+            </p>
+            {(searchTerm || filter !== 'ALL') && (
+              <button
+                onClick={() => {
+                  setSearchTerm('');
+                  setFilter('ALL');
+                }}
+                style={{
+                  padding: '0.75rem 1.5rem',
+                  backgroundColor: '#3b82f6',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: '600'
+                }}
+              >
+                Clear Filters
+              </button>
+            )}
           </div>
         )}
 
-        {exhibitions.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {exhibitions.map((exhibition) => (
-              <div key={exhibition.id} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
-                <div className="p-6">
-                  <h3 className="text-xl font-semibold text-gray-900 mb-2">{exhibition.title}</h3>
-                  <div className="space-y-2 text-sm text-gray-600">
-                    <p><strong>Start Date:</strong> {new Date(exhibition.start_date).toLocaleDateString()}</p>
-                    <p><strong>End Date:</strong> {new Date(exhibition.end_date).toLocaleDateString()}</p>
-                    <p><strong>Status:</strong> 
-                      <span className={`ml-2 px-2 py-1 rounded-full text-xs ${
-                        exhibition.status === 'ONGOING' ? 'bg-green-100 text-green-800' :
-                        exhibition.status === 'UPCOMING' ? 'bg-blue-100 text-blue-800' :
-                        'bg-gray-100 text-gray-800'
-                      }`}>
-                        {exhibition.status}
-                      </span>
-                    </p>
-                    {exhibition.art_pieces && (
-                      <p><strong>Art Pieces:</strong> {exhibition.art_pieces.length} pieces</p>
-                    )}
+        {/* Exhibitions Grid */}
+        {filteredExhibitions.length > 0 && (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
+            gap: '2rem',
+            marginBottom: '2rem'
+          }}>
+            {filteredExhibitions.map((exhibition) => (
+              <div 
+                key={exhibition.id} 
+                style={{
+                  backgroundColor: 'white',
+                  borderRadius: '16px',
+                  overflow: 'hidden',
+                  boxShadow: '0 4px 6px rgba(0,0,0,0.07)',
+                  transition: 'all 0.3s ease',
+                  border: '1px solid #e2e8f0'
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.transform = 'translateY(-4px)';
+                  e.target.style.boxShadow = '0 10px 25px rgba(0,0,0,0.15)';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.transform = 'translateY(0)';
+                  e.target.style.boxShadow = '0 4px 6px rgba(0,0,0,0.07)';
+                }}
+              >
+                {/* Exhibition Header */}
+                <div style={{
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  padding: '2rem',
+                  color: 'white',
+                  position: 'relative'
+                }}>
+                  <div style={{
+                    position: 'absolute',
+                    top: '1rem',
+                    right: '1rem'
+                  }}>
+                    <span style={getStatusBadgeStyle(exhibition.status)}>
+                      {exhibition.status}
+                    </span>
                   </div>
+                  
+                  <h3 style={{
+                    fontSize: '1.5rem',
+                    fontWeight: '700',
+                    marginBottom: '0.5rem',
+                    lineHeight: '1.3',
+                    paddingRight: '100px'
+                  }}>
+                    {exhibition.title}
+                  </h3>
+                  
+                  <p style={{
+                    fontSize: '0.95rem',
+                    opacity: '0.9',
+                    fontWeight: '500'
+                  }}>
+                    {getDaysRemaining(exhibition.start_date, exhibition.end_date, exhibition.status)}
+                  </p>
+                </div>
+
+                {/* Exhibition Details */}
+                <div style={{ padding: '2rem' }}>
+                  <div style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: '1fr 1fr', 
+                    gap: '1.5rem',
+                    marginBottom: '1.5rem'
+                  }}>
+                    <div>
+                      <h4 style={{
+                        fontSize: '0.8rem',
+                        fontWeight: '600',
+                        color: '#64748b',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        marginBottom: '0.5rem'
+                      }}>
+                        Start Date
+                      </h4>
+                      <p style={{
+                        fontSize: '1rem',
+                        fontWeight: '600',
+                        color: '#1e293b'
+                      }}>
+                        {formatDate(exhibition.start_date)}
+                      </p>
+                    </div>
+                    
+                    <div>
+                      <h4 style={{
+                        fontSize: '0.8rem',
+                        fontWeight: '600',
+                        color: '#64748b',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        marginBottom: '0.5rem'
+                      }}>
+                        End Date
+                      </h4>
+                      <p style={{
+                        fontSize: '1rem',
+                        fontWeight: '600',
+                        color: '#1e293b'
+                      }}>
+                        {formatDate(exhibition.end_date)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {exhibition.art_pieces && exhibition.art_pieces.length > 0 && (
+                    <div style={{
+                      backgroundColor: '#f8fafc',
+                      padding: '1rem',
+                      borderRadius: '8px',
+                      marginBottom: '1.5rem'
+                    }}>
+                      <h4 style={{
+                        fontSize: '0.8rem',
+                        fontWeight: '600',
+                        color: '#64748b',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        marginBottom: '0.5rem'
+                      }}>
+                        Featured Artworks
+                      </h4>
+                      <p style={{
+                        fontSize: '1.1rem',
+                        fontWeight: '700',
+                        color: '#3b82f6'
+                      }}>
+                        {exhibition.art_pieces.length} piece{exhibition.art_pieces.length !== 1 ? 's' : ''} on display
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Action Button */}
+                  <button
+                    style={{
+                      width: '100%',
+                      padding: '0.875rem',
+                      backgroundColor: '#3b82f6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '1rem',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.target.style.backgroundColor = '#2563eb'}
+                    onMouseLeave={(e) => e.target.style.backgroundColor = '#3b82f6'}
+                    onClick={() => {
+                      // Add navigation logic here if needed
+                      alert(`More details about "${exhibition.title}" coming soon!`);
+                    }}
+                  >
+                    View Exhibition Details
+                  </button>
                 </div>
               </div>
             ))}
           </div>
         )}
+
+        {/* Results Summary */}
+        {filteredExhibitions.length > 0 && (
+          <div style={{
+            textAlign: 'center',
+            padding: '2rem',
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
+            <p style={{ 
+              fontSize: '1.1rem', 
+              color: '#64748b',
+              fontWeight: '500'
+            }}>
+              Showing {filteredExhibitions.length} of {exhibitions.length} exhibitions
+              {filter !== 'ALL' && ` (filtered by ${filter})`}
+              {searchTerm && ` (matching "${searchTerm}")`}
+            </p>
+          </div>
+        )}
       </div>
+
+      <style>
+        {`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}
+      </style>
     </div>
   );
 };

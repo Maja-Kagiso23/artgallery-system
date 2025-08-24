@@ -103,7 +103,7 @@ const Dashboard = () => {
               to="/artists"
               style={{
                 display: 'inline-block',
-                backgroundColor: '#4CAF50',
+                backgroundColor: '#7b7c7bff',
                 color: 'white',
                 padding: '0.75rem 1.5rem',
                 textDecoration: 'none',
@@ -158,7 +158,7 @@ const Dashboard = () => {
           <h2>Visitor Actions</h2>
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
             <Link 
-              to="/exhibitions"
+              to="/gallery"
               style={{
                 display: 'inline-block',
                 backgroundColor: '#4CAF50',
