@@ -73,121 +73,180 @@ const ExhibitionSetupManagement = () => {
     return setupStatuses.find(status => status.exhibition === exhibitionId);
   };
 
-  const handleSetupConfirm = async (exhibition) => {
-    if (!window.confirm(`Confirm setup completion for "${exhibition.title}"?\n\nThis will:\n- Mark all art pieces as DISPLAYED\n- Change exhibition status to ONGOING`)) return;
-    
-    setProcessingAction(`setup-${exhibition.id}`);
-    try {
-      console.log('🔧 Confirming setup for exhibition:', exhibition.title);
-      
-      // Update art pieces to DISPLAYED status
-      const exhibitionArtPieces = exhibition.art_pieces || [];
-      console.log('🎨 Updating art pieces:', exhibitionArtPieces.length);
-      
-      for (const artPiece of exhibitionArtPieces) {
-        await ApiService.updateArtPiece(artPiece.id, {
-          ...artPiece,
-          status: 'DISPLAYED'
-        });
-      }
+// Replace the clerk-finding logic in both handleSetupConfirm and handleTeardownConfirm
 
-      // Create or update setup status
-      const existingStatus = getSetupStatus(exhibition.id);
-      const statusData = {
-        exhibition: exhibition.id,
-        clerk: 1, // TODO: Map user to clerk properly
-        setup_confirmed: true,
-        teardown_confirmed: existingStatus?.teardown_confirmed || false
-      };
+const handleSetupConfirm = async (exhibition) => {
+  if (!window.confirm(`Confirm setup completion for "${exhibition.title}"?\n\nThis will:\n- Mark all art pieces as DISPLAYED\n- Change exhibition status to ONGOING`)) return;
+  
+  setProcessingAction(`setup-${exhibition.id}`);
+  try {
+    console.log('🔧 Confirming setup for exhibition:', exhibition.title);
 
-      if (existingStatus) {
-        await ApiService.request(`/setupstatuses/${existingStatus.id}/`, {
-          method: 'PUT',
-          body: JSON.stringify(statusData)
-        });
-      } else {
-        await ApiService.request('/setupstatuses/', {
-          method: 'POST',
-          body: JSON.stringify(statusData)
-        });
-      }
-
-      // Update exhibition status to ONGOING if it's UPCOMING
-      if (exhibition.status === 'UPCOMING') {
-        await ApiService.updateExhibition(exhibition.id, {
-          ...exhibition,
-          status: 'ONGOING'
-        });
-      }
-
-      setSuccess(`Setup confirmed for "${exhibition.title}". Art pieces updated to DISPLAYED status.`);
-      await fetchData(); // Refresh all data
-      
-      setTimeout(() => setSuccess(''), 5000);
-    } catch (error) {
-      console.error('❌ Setup confirmation failed:', error);
-      setError(`Failed to confirm setup for "${exhibition.title}": ${error.message}`);
-    } finally {
-      setProcessingAction(null);
+    // Update art pieces to DISPLAYED status
+    const exhibitionArtPieces = exhibition.art_pieces || [];
+    for (const artPiece of exhibitionArtPieces) {
+      await ApiService.updateArtPiece(artPiece.id, {
+        ...artPiece,
+        status: 'DISPLAYED'
+      });
     }
-  };
 
-  const handleTeardownConfirm = async (exhibition) => {
-    if (!window.confirm(`Confirm teardown completion for "${exhibition.title}"?\n\nThis will:\n- Mark all art pieces as AVAILABLE\n- Change exhibition status to COMPLETED`)) return;
-    
-    setProcessingAction(`teardown-${exhibition.id}`);
+    // 🔍 Try to get clerk, fall back to hardcoded
+    let clerkId;
     try {
-      console.log('🔧 Confirming teardown for exhibition:', exhibition.title);
+      const currentUser = ApiService.getCurrentUser();
+      const clerks = await ApiService.getClerks();
+      console.log('Available clerks:', clerks);
       
-      // Update art pieces back to AVAILABLE status
-      const exhibitionArtPieces = exhibition.art_pieces || [];
-      console.log('🎨 Updating art pieces back to AVAILABLE:', exhibitionArtPieces.length);
+      // Try to find by email first
+      let clerkObj = clerks.find(c => c.email === currentUser.email);
       
-      for (const artPiece of exhibitionArtPieces) {
-        await ApiService.updateArtPiece(artPiece.id, {
-          ...artPiece,
-          status: 'AVAILABLE'
-        });
+      // If not found by email, use hardcoded email or first available clerk
+      if (!clerkObj) {
+        // Temporarily use alice.wilson@artgallery.com for clerk01@artgallery.com users
+        clerkObj = clerks.find(c => c.email === 'alice.wilson@artgallery.com');
+        console.log('Using hardcoded alice.wilson clerk for clerk01 user:', clerkObj);
       }
-
-      // Update setup status
-      const existingStatus = getSetupStatus(exhibition.id);
-      const statusData = {
-        exhibition: exhibition.id,
-        clerk: 1, // TODO: Map user to clerk properly
-        setup_confirmed: existingStatus?.setup_confirmed || false,
-        teardown_confirmed: true
-      };
-
-      if (existingStatus) {
-        await ApiService.request(`/setupstatuses/${existingStatus.id}/`, {
-          method: 'PUT',
-          body: JSON.stringify(statusData)
-        });
+      
+      // Final fallback to first clerk if still not found
+      if (!clerkObj && clerks.length > 0) {
+        clerkObj = clerks[0];
+        console.log('Using first available clerk:', clerkObj);
+      }
+      
+      if (clerkObj) {
+        clerkId = clerkObj.id;
+        console.log('👤 Using clerk:', clerkObj);
       } else {
-        await ApiService.request('/setupstatuses/', {
-          method: 'POST',
-          body: JSON.stringify(statusData)
-        });
+        throw new Error('No clerks found');
       }
+    } catch (error) {
+      console.log('⚠️ Clerk lookup failed, using hardcoded ID 1:', error.message);
+      clerkId = 1; // Hardcoded fallback - change this to actual clerk ID
+    }
 
-      // Update exhibition status to COMPLETED
+    // Build status data
+    const existingStatus = getSetupStatus(exhibition.id);
+    const statusData = {
+      exhibition: exhibition.id,
+      clerk: clerkId,
+      setup_confirmed: true,
+      teardown_confirmed: existingStatus?.teardown_confirmed || false
+    };
+
+    if (existingStatus) {
+      await ApiService.request(`/setupstatuses/${existingStatus.id}/`, {
+        method: 'PATCH',
+        body: statusData
+      });
+    } else {
+      await ApiService.request('/setupstatuses/', {
+        method: 'POST',
+        body: statusData
+      });
+    }
+
+    // Update exhibition status to ONGOING
+    if (exhibition.status === 'UPCOMING') {
       await ApiService.updateExhibition(exhibition.id, {
         ...exhibition,
-        status: 'COMPLETED'
+        status: 'ONGOING'
       });
-
-      setSuccess(`Teardown confirmed for "${exhibition.title}". Art pieces updated to AVAILABLE status.`);
-      await fetchData(); // Refresh all data
-      
-      setTimeout(() => setSuccess(''), 5000);
-    } catch (error) {
-      console.error('❌ Teardown confirmation failed:', error);
-      setError(`Failed to confirm teardown for "${exhibition.title}": ${error.message}`);
-    } finally {
-      setProcessingAction(null);
     }
-  };
+
+    setSuccess(`Setup confirmed for "${exhibition.title}". Art pieces updated to DISPLAYED status.`);
+    await fetchData();
+    setTimeout(() => setSuccess(''), 5000);
+  } catch (error) {
+    console.error('❌ Setup confirmation failed:', error);
+    setError(`Failed to confirm setup for "${exhibition.title}": ${error.message}`);
+  } finally {
+    setProcessingAction(null);
+  }
+};
+
+const handleTeardownConfirm = async (exhibition) => {
+  if (!window.confirm(`Confirm teardown completion for "${exhibition.title}"?\n\nThis will:\n- Mark all art pieces as AVAILABLE\n- Change exhibition status to COMPLETED`)) return;
+  
+  setProcessingAction(`teardown-${exhibition.id}`);
+  try {
+    console.log('🔧 Confirming teardown for exhibition:', exhibition.title);
+
+    // Update art pieces back to AVAILABLE
+    const exhibitionArtPieces = exhibition.art_pieces || [];
+    for (const artPiece of exhibitionArtPieces) {
+      await ApiService.updateArtPiece(artPiece.id, {
+        ...artPiece,
+        status: 'AVAILABLE'
+      });
+    }
+
+    // 🔍 Try to get clerk, fall back to hardcoded
+    let clerkId;
+    try {
+      const currentUser = ApiService.getCurrentUser();
+      const clerks = await ApiService.getClerks();
+      console.log('Available clerks:', clerks);
+      
+      // Try to find by email first
+      let clerkObj = clerks.find(c => c.email === currentUser.email);
+      
+      // If not found by email, try by name or just use the first one
+      if (!clerkObj && clerks.length > 0) {
+        clerkObj = clerks[0]; // Use first available clerk
+        console.log('No email match, using first clerk:', clerkObj);
+      }
+      
+      if (clerkObj) {
+        clerkId = clerkObj.id;
+        console.log('👤 Using clerk:', clerkObj);
+      } else {
+        throw new Error('No clerks found');
+      }
+    } catch (error) {
+      console.log('⚠️ Clerk lookup failed, using hardcoded ID 1:', error.message);
+      clerkId = 1; // Hardcoded fallback - change this to actual clerk ID
+    }
+
+    // Build status data
+    const existingStatus = getSetupStatus(exhibition.id);
+    const statusData = {
+      exhibition: exhibition.id,
+      clerk: clerkId,
+      setup_confirmed: existingStatus?.setup_confirmed || false,
+      teardown_confirmed: true
+    };
+
+    if (existingStatus) {
+      await ApiService.request(`/setupstatuses/${existingStatus.id}/`, {
+        method: 'PATCH',
+        body: statusData
+      });
+    } else {
+      await ApiService.request('/setupstatuses/', {
+        method: 'POST',
+        body: statusData
+      });
+    }
+
+    // Update exhibition status to COMPLETED
+    await ApiService.updateExhibition(exhibition.id, {
+      ...exhibition,
+      status: 'COMPLETED'
+    });
+
+    setSuccess(`Teardown confirmed for "${exhibition.title}". Art pieces updated to AVAILABLE status.`);
+    await fetchData();
+    setTimeout(() => setSuccess(''), 5000);
+  } catch (error) {
+    console.error('❌ Teardown confirmation failed:', error);
+    setError(`Failed to confirm teardown for "${exhibition.title}": ${error.message}`);
+  } finally {
+    setProcessingAction(null);
+  }
+};
+
+
 
   const getExhibitionStatusBadge = (status) => {
     const baseStyle = {

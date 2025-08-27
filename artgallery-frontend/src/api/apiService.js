@@ -138,15 +138,17 @@ class ApiService {
       throw new Error('Authentication required');
     }
 
-    if (!response.ok) {
-      let errorData;
-      try {
-        errorData = await response.json();
-      } catch {
-        errorData = { detail: `HTTP error! status: ${response.status}` };
-      }
-      throw new Error(errorData.detail || errorData.message || `HTTP error! status: ${response.status}`);
-    }
+	if (!response.ok) {
+	  let errorData;
+	  try {
+		errorData = await response.json();
+		console.error("❌ API Error Response:", errorData); // 👈 add this line
+	  } catch {
+		errorData = { detail: `HTTP error! status: ${response.status}` };
+	  }
+	  throw new Error(errorData.detail || errorData.message || JSON.stringify(errorData) || `HTTP error! status: ${response.status}`);
+	}
+
 
     // Handle empty responses (like DELETE, 204 No Content)
     if (response.status === 204) {
