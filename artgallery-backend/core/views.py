@@ -11,8 +11,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny
 
 import logging,traceback
+import json
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -31,6 +33,29 @@ from .serializers import (
     UserSerializer, UserRegistrationSerializer,
     RegistrationCreateSerializer
 )
+
+# ---------------------------
+# Custom Permission Classes
+# ---------------------------
+
+class IsAdminOrReadOnly(IsAuthenticatedOrReadOnly):
+    """
+    Custom permission to only allow admins to edit objects.
+    """
+    def has_permission(self, request, view):
+        if request.method in ['GET', 'HEAD', 'OPTIONS']:
+            return True
+        return request.user and request.user.is_authenticated and getattr(request.user, 'role', None) == 'admin'
+
+class IsClerkOrAdminOrReadOnly(IsAuthenticatedOrReadOnly):
+    """
+    Custom permission to only allow clerks and admins to edit objects.
+    """
+    def has_permission(self, request, view):
+        if request.method in ['GET', 'HEAD', 'OPTIONS']:
+            return True
+        return (request.user and request.user.is_authenticated and 
+                getattr(request.user, 'role', None) in ['clerk', 'admin'])
 
 # ---------------------------
 # Authentication Views
@@ -115,7 +140,7 @@ class LogoutView(APIView):
 class ArtistViewSet(viewsets.ModelViewSet):
     queryset = Artist.objects.all().order_by('name')
     serializer_class = ArtistSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAdminOrReadOnly]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'bio']
 
@@ -123,7 +148,7 @@ class ArtistViewSet(viewsets.ModelViewSet):
 class ArtPieceViewSet(viewsets.ModelViewSet):
     queryset = ArtPiece.objects.all().order_by('title')
     serializer_class = ArtPieceSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsClerkOrAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['status', 'artist']
     search_fields = ['title', 'description']
@@ -132,7 +157,7 @@ class ArtPieceViewSet(viewsets.ModelViewSet):
 class ExhibitionViewSet(viewsets.ModelViewSet):
     queryset = Exhibition.objects.all().order_by('-start_date')
     serializer_class = ExhibitionSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsClerkOrAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['status']
     search_fields = ['title']
@@ -155,7 +180,7 @@ class VisitorViewSet(viewsets.ModelViewSet):
 
 
 class RegistrationViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticatedOrReadOnly] 
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['visitor', 'exhibition', 'status', 'confirmed']
     
@@ -166,6 +191,9 @@ class RegistrationViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
+        if not user.is_authenticated:
+            return Registration.objects.none()
+            
         user_role = getattr(user, 'role', 'visitor')
 
         if user_role in ['clerk', 'admin']:
@@ -178,15 +206,46 @@ class RegistrationViewSet(viewsets.ModelViewSet):
             return Registration.objects.none()
     
     def create(self, request, *args, **kwargs):
-        """Handle registration creation with improved error handling"""
-        logger.info(f"Registration create called - User: {request.user.email}")
+        # Check if user is authenticated
+        if not request.user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required to create registration'}, 
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        # Safe way to log user info that handles anonymous users
+        user_identifier = request.user.email
+        logger.info(f"Registration create called - User: {user_identifier}")
+        
+        # Debug logging to understand request data structure
+        logger.info(f"Request data type: {type(request.data)}")
         logger.info(f"Request data: {request.data}")
         
         try:
             # Start transaction
             with transaction.atomic():
+                # Handle different data formats
+                if isinstance(request.data, str):
+                    try:
+                        data = json.loads(request.data)
+                        logger.info(f"Parsed JSON data: {data}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON data: {e}")
+                        return Response(
+                            {'error': 'Invalid JSON data format'}, 
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                elif hasattr(request.data, 'get'):
+                    data = request.data
+                else:
+                    logger.error(f"Unsupported data format: {type(request.data)}")
+                    return Response(
+                        {'error': 'Unsupported data format'}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
                 # Get exhibition ID - try both field names
-                exhibition_id = request.data.get('exhibition') or request.data.get('exhibition_id')
+                exhibition_id = data.get('exhibition') or data.get('exhibition_id')
                 
                 if not exhibition_id:
                     logger.error("No exhibition ID provided in request")
@@ -224,10 +283,16 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_404_NOT_FOUND
                     )
                 
-                # Get or create visitor profile
-                visitor_name = f"{request.user.first_name} {request.user.last_name}".strip()
-                if not visitor_name:
+                # Get or create visitor profile - safely handle user attributes
+                visitor_name = ""
+                if hasattr(request.user, 'first_name') and hasattr(request.user, 'last_name'):
+                    visitor_name = f"{request.user.first_name} {request.user.last_name}".strip()
+                
+                if not visitor_name and hasattr(request.user, 'username'):
                     visitor_name = request.user.username
+                
+                if not visitor_name:
+                    visitor_name = request.user.email  # Fallback to email
                 
                 try:
                     visitor, created = Visitor.objects.get_or_create(
@@ -271,7 +336,7 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                     )
                 
                 # Validate attendees count
-                attendees_count = request.data.get('attendees_count', 1)
+                attendees_count = data.get('attendees_count', 1)
                 try:
                     attendees_count = int(attendees_count)
                     if attendees_count < 1:
@@ -305,9 +370,6 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                 registration_fields = [f.name for f in Registration._meta.get_fields()]
                 if 'submitted_at' in registration_fields:
                     registration_data['submitted_at'] = timezone.now()
-                
-                # Remove the queue_position calculation - let the model handle it automatically
-                # The Registration.save() method will handle queue position assignment
                 
                 registration = Registration.objects.create(**registration_data)
                 
@@ -493,10 +555,11 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
 class ClerkViewSet(viewsets.ModelViewSet):
     queryset = Clerk.objects.all().order_by('name')
     serializer_class = ClerkSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAdminOrReadOnly]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'email']
 
@@ -504,32 +567,9 @@ class ClerkViewSet(viewsets.ModelViewSet):
 class SetupStatusViewSet(viewsets.ModelViewSet):
     queryset = SetupStatus.objects.all().order_by('-timestamp')
     serializer_class = SetupStatusSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsClerkOrAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['exhibition', 'clerk', 'setup_confirmed', 'teardown_confirmed']
-
-# ---------------------------
-# Custom Permission Classes
-# ---------------------------
-
-class IsAdminOrReadOnly(IsAuthenticatedOrReadOnly):
-    """
-    Custom permission to only allow admins to edit objects.
-    """
-    def has_permission(self, request, view):
-        if request.method in ['GET', 'HEAD', 'OPTIONS']:
-            return True
-        return request.user and request.user.is_authenticated and getattr(request.user, 'role', None) == 'admin'
-
-class IsClerkOrAdminOrReadOnly(IsAuthenticatedOrReadOnly):
-    """
-    Custom permission to only allow clerks and admins to edit objects.
-    """
-    def has_permission(self, request, view):
-        if request.method in ['GET', 'HEAD', 'OPTIONS']:
-            return True
-        return (request.user and request.user.is_authenticated and 
-                getattr(request.user, 'role', None) in ['clerk', 'admin'])
 
 # ---------------------------
 # User Management Views
@@ -732,10 +772,3 @@ class TimestampMixin:
         response = super().retrieve(request, *args, **kwargs)
         response.data['timestamp'] = timezone.now().isoformat()
         return response
-
-# Apply custom permissions to existing viewsets
-ArtistViewSet.permission_classes = [IsAdminOrReadOnly]
-ArtPieceViewSet.permission_classes = [IsClerkOrAdminOrReadOnly] 
-ExhibitionViewSet.permission_classes = [IsClerkOrAdminOrReadOnly]
-ClerkViewSet.permission_classes = [IsAdminOrReadOnly]
-SetupStatusViewSet.permission_classes = [IsClerkOrAdminOrReadOnly]

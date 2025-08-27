@@ -195,6 +195,27 @@ class RegistrationCreateSerializer(serializers.ModelSerializer):
         attrs.pop('exhibition_id', None)
         
         return attrs
+    
+    def create(self, validated_data):
+        # Add the visitor automatically from the request user
+        user = self.context['request'].user
+        visitor_name = f"{user.first_name} {user.last_name}".strip()
+        if not visitor_name:
+            visitor_name = user.username
+        
+        visitor, created = Visitor.objects.get_or_create(
+            email=user.email,
+            defaults={
+                'name': visitor_name,
+                'phone': getattr(user, 'phone', '')
+            }
+        )
+        
+        validated_data['visitor'] = visitor
+        validated_data['status'] = 'PENDING'
+        validated_data['confirmed'] = False
+        
+        return super().create(validated_data)
 
 class RegistrationDetailSerializer(serializers.ModelSerializer):
     """Serializer for detailed registration responses"""
