@@ -71,7 +71,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         required=True, 
         validators=[validate_password]
     )
-    confirm_password = serializers.CharField(write_only=True, required=False)  # Changed to required=False
+    confirm_password = serializers.CharField(write_only=True, required=False)
     
     class Meta:
         model = User
@@ -191,7 +191,6 @@ class RegistrationCreateSerializer(serializers.ModelSerializer):
             except Exhibition.DoesNotExist:
                 raise serializers.ValidationError("Exhibition not found")
         
-        # Remove exhibition_id from validated data
         attrs.pop('exhibition_id', None)
         
         return attrs

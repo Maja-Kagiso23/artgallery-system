@@ -1,4 +1,3 @@
-// api/apiService.js
 const API_BASE_URL = 'http://localhost:8000/api';
 
 class ApiService {
@@ -104,7 +103,7 @@ class ApiService {
       config.body = options.body;
     }
 
-    // Remove body for GET/HEAD requests
+    // GET/HEAD requests
     if (['GET', 'HEAD'].includes(config.method) && config.body) {
       delete config.body;
     }
@@ -142,7 +141,7 @@ class ApiService {
 	  let errorData;
 	  try {
 		errorData = await response.json();
-		console.error("❌ API Error Response:", errorData); // 👈 add this line
+		console.error("❌ API Error Response:", errorData);
 	  } catch {
 		errorData = { detail: `HTTP error! status: ${response.status}` };
 	  }

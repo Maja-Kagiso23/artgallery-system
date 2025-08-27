@@ -148,8 +148,6 @@ class Registration(models.Model):
         self.reviewed_at = timezone.now()
         self.visitor_notified = False  # Reset to send approval notification
         self.save()
-        
-        # Remove from queue and adjust positions
         self._adjust_queue_positions()
     
     def reject(self, clerk_user, reason=""):
@@ -161,8 +159,6 @@ class Registration(models.Model):
         self.rejection_reason = reason
         self.visitor_notified = False  # Reset to send rejection notification
         self.save()
-        
-        # Remove from queue and adjust positions
         self._adjust_queue_positions()
     
     def cancel(self):
@@ -170,8 +166,6 @@ class Registration(models.Model):
         self.status = 'CANCELLED'
         self.confirmed = False
         self.save()
-        
-        # Remove from queue and adjust positions
         self._adjust_queue_positions()
     
     def _adjust_queue_positions(self):

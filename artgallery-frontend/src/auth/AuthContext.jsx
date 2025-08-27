@@ -41,7 +41,6 @@ export const AuthProvider = ({ children }) => {
     return apiService.hasPermission(requiredRole);
   };
 
-  // Use useMemo to stabilize the context value
   const value = useMemo(() => ({
     isAuthenticated,
     user,

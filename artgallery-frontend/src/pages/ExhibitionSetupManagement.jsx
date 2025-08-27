@@ -65,7 +65,6 @@ const ExhibitionSetupManagement = () => {
       setSetupStatuses(Array.isArray(statusData) ? statusData : []);
     } catch (error) {
       console.error('❌ Failed to fetch setup statuses:', error);
-      // Don't throw - setup statuses might not exist yet
     }
   };
 
@@ -73,7 +72,6 @@ const ExhibitionSetupManagement = () => {
     return setupStatuses.find(status => status.exhibition === exhibitionId);
   };
 
-// Replace the clerk-finding logic in both handleSetupConfirm and handleTeardownConfirm
 
 const handleSetupConfirm = async (exhibition) => {
   if (!window.confirm(`Confirm setup completion for "${exhibition.title}"?\n\nThis will:\n- Mark all art pieces as DISPLAYED\n- Change exhibition status to ONGOING`)) return;
@@ -91,24 +89,20 @@ const handleSetupConfirm = async (exhibition) => {
       });
     }
 
-    // 🔍 Try to get clerk, fall back to hardcoded
     let clerkId;
     try {
       const currentUser = ApiService.getCurrentUser();
       const clerks = await ApiService.getClerks();
       console.log('Available clerks:', clerks);
-      
-      // Try to find by email first
+
       let clerkObj = clerks.find(c => c.email === currentUser.email);
       
-      // If not found by email, use hardcoded email or first available clerk
       if (!clerkObj) {
-        // Temporarily use alice.wilson@artgallery.com for clerk01@artgallery.com users
         clerkObj = clerks.find(c => c.email === 'alice.wilson@artgallery.com');
         console.log('Using hardcoded alice.wilson clerk for clerk01 user:', clerkObj);
       }
       
-      // Final fallback to first clerk if still not found
+     
       if (!clerkObj && clerks.length > 0) {
         clerkObj = clerks[0];
         console.log('Using first available clerk:', clerkObj);
@@ -122,7 +116,7 @@ const handleSetupConfirm = async (exhibition) => {
       }
     } catch (error) {
       console.log('⚠️ Clerk lookup failed, using hardcoded ID 1:', error.message);
-      clerkId = 1; // Hardcoded fallback - change this to actual clerk ID
+      clerkId = 1;
     }
 
     // Build status data

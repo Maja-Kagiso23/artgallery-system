@@ -73,6 +73,7 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh_legacy'),
     path('api/register/', RegisterView.as_view(), name='register_legacy'),
     
+    # REFRESH APIs
     path('api/auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh_legacy'),
 ]
