@@ -10,9 +10,12 @@ class Artist(models.Model):
     phone = models.CharField(max_length=30, blank=True, null=True)
     nationality = models.CharField(max_length=100, blank=True, null=True)
     bio = models.TextField(blank=True, null=True)
-
+ 
     def __str__(self):
         return self.name
+        
+    class Meta:
+        ordering = ['name']
 
 class ArtPiece(models.Model):
     STATUS_CHOICES = [
@@ -25,9 +28,12 @@ class ArtPiece(models.Model):
     artist = models.ForeignKey(Artist, on_delete=models.CASCADE)
     estimated_value = models.DecimalField(max_digits=12, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='AVAILABLE')
-
+        
     def __str__(self):
         return self.title
+        
+    class Meta:
+        ordering = ['title', 'artist__name']
 
 class Exhibition(models.Model):
     STATUS_CHOICES = [
@@ -40,9 +46,12 @@ class Exhibition(models.Model):
     end_date = models.DateField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='UPCOMING')
     art_pieces = models.ManyToManyField(ArtPiece, through='ExhibitionArtPiece')
-
+    
     def __str__(self):
         return self.title
+        
+    class Meta:
+        ordering = ['-start_date', 'title']
 
 class ExhibitionArtPiece(models.Model):
     exhibition = models.ForeignKey(Exhibition, on_delete=models.CASCADE)
@@ -51,6 +60,7 @@ class ExhibitionArtPiece(models.Model):
 
     class Meta:
         unique_together = ('exhibition', 'art_piece')
+        ordering = ['exhibition', 'art_piece']
 
 class Visitor(models.Model):
     name = models.CharField(max_length=255)
@@ -59,6 +69,9 @@ class Visitor(models.Model):
 
     def __str__(self):
         return self.name
+        
+    class Meta:
+        ordering = ['name']
 
 class Registration(models.Model):
     REGISTRATION_STATUS_CHOICES = [
@@ -197,6 +210,9 @@ class Clerk(models.Model):
 
     def __str__(self):
         return self.name
+        
+    class Meta:
+        ordering = ['name']
 
 class SetupStatus(models.Model):
     exhibition = models.ForeignKey(Exhibition, on_delete=models.CASCADE)
@@ -204,3 +220,6 @@ class SetupStatus(models.Model):
     setup_confirmed = models.BooleanField(default=False)
     teardown_confirmed = models.BooleanField(default=False)
     timestamp = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-timestamp']

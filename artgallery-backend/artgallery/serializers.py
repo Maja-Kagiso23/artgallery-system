@@ -2,7 +2,6 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import *
 
-# Add this line to define User
 User = get_user_model()
 
 class ArtistSerializer(serializers.ModelSerializer):
@@ -31,9 +30,39 @@ class VisitorSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class RegistrationSerializer(serializers.ModelSerializer):
+    # Include nested visitor and exhibition data
+    visitor_name = serializers.CharField(source='visitor.name', read_only=True)
+    visitor_email = serializers.CharField(source='visitor.email', read_only=True)
+    exhibition_title = serializers.CharField(source='exhibition.title', read_only=True)
+    exhibition_status = serializers.CharField(source='exhibition.status', read_only=True)
+    
+    # Include full nested objects as well (optional, for detailed views)
+    visitor = VisitorSerializer(read_only=True)
+    exhibition = ExhibitionSerializer(read_only=True)
+    
     class Meta:
         model = Registration
-        fields = '__all__'
+        fields = [
+            'id',
+            'visitor',
+            'exhibition', 
+            'attendees_count',
+            'status',
+            'confirmed',
+            'queue_position',
+            'submitted_at',
+            'timestamp',
+            'reviewed_by',
+            'reviewed_at',
+            'rejection_reason',
+            'visitor_notified',
+            # Add the new fields for easy access
+            'visitor_name',
+            'visitor_email',
+            'exhibition_title',
+            'exhibition_status'
+        ]
+        read_only_fields = ['id', 'timestamp', 'submitted_at', 'reviewed_by', 'reviewed_at']
 
 class ClerkSerializer(serializers.ModelSerializer):
     class Meta:
@@ -50,39 +79,39 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'email', 'role', 'first_name', 'last_name']
 
+# FIXED: Create a proper RegisterSerializer for user registration
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True)
     
     class Meta:
         model = User
-        fields = ['username', 'email', 'password', 'first_name', 'last_name', 'phone']
+        fields = ['username', 'email', 'password', 'confirm_password', 'first_name', 'last_name']
         extra_kwargs = {
             'password': {'write_only': True},
-            'email': {'required': True}
         }
     
-    def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
-        return value
-    
-    def validate_username(self, value):
-        if User.objects.filter(username=value).exists():
-            raise serializers.ValidationError("A user with this username already exists.")
-        return value
+    def validate(self, attrs):
+        if attrs['password'] != attrs['confirm_password']:
+            raise serializers.ValidationError("Passwords don't match.")
+        return attrs
     
     def create(self, validated_data):
-        # Extract phone if provided (assuming CustomUser has phone field)
-        phone = validated_data.pop('phone', None)
-        password = validated_data.pop('password')
+        # Remove confirm_password from validated_data
+        validated_data.pop('confirm_password', None)
         
-        user = User(**validated_data)
-        user.set_password(password)
-        user.role = 'visitor'  # Default role
+        # Create user with hashed password
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data.get('first_name', ''),
+            last_name=validated_data.get('last_name', ''),
+        )
         
-        # Add phone if the model supports it
-        if phone and hasattr(user, 'phone'):
-            user.phone = phone
-            
-        user.save()
+        # Set default role if the User model has a role field
+        if hasattr(user, 'role'):
+            user.role = 'visitor'
+            user.save()
+        
         return user

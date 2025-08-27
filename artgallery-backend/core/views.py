@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model, authenticate
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db import models, transaction, IntegrityError
+from django.db.models import Max,F
 from rest_framework import viewsets, filters, generics, status
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -10,6 +12,10 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework.decorators import action
 
+import logging,traceback
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -17,11 +23,13 @@ from .models import (
     Artist, ArtPiece, Exhibition, ExhibitionArtPiece,
     Visitor, Registration, Clerk, SetupStatus
 )
+
 from .serializers import (
     ArtistSerializer, ArtPieceSerializer, ExhibitionSerializer,
     ExhibitionArtPieceSerializer, VisitorSerializer,
     RegistrationSerializer, ClerkSerializer, SetupStatusSerializer,
-    UserSerializer, RegisterSerializer
+    UserSerializer, UserRegistrationSerializer,
+    RegistrationCreateSerializer
 )
 
 # ---------------------------
@@ -50,29 +58,41 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     permission_classes = [AllowAny]
-    serializer_class = RegisterSerializer
+    serializer_class = UserRegistrationSerializer 
     
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        try:
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            user = serializer.save()
+            
+            # Generate tokens for the new user
+            refresh = RefreshToken.for_user(user)
+            
+            return Response({
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'role': getattr(user, 'role', 'visitor'),
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                },
+                'access': str(refresh.access_token),
+                'refresh': str(refresh),
+                'detail': 'User registered successfully'
+            }, status=status.HTTP_201_CREATED)
         
-        # Generate tokens for the new user
-        refresh = RefreshToken.for_user(user)
-        
-        return Response({
-            'user': {
-                'id': user.id,
-                'username': user.username,
-                'email': user.email,
-                'role': getattr(user, 'role', 'visitor'),
-                'first_name': user.first_name,
-                'last_name': user.last_name,
-            },
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
-            'detail': 'User registered successfully'
-        }, status=status.HTTP_201_CREATED)
+        except IntegrityError as e:
+            logger.error(f"Registration integrity error: {e}")
+            return Response({
+                'error': 'A user with this username or email already exists.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Registration error: {e}")
+            return Response({
+                'error': 'Registration failed. Please try again.'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -85,6 +105,7 @@ class LogoutView(APIView):
                 token.blacklist()
             return Response({"detail": "Successfully logged out"}, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.error(f"Logout error: {e}")
             return Response({"detail": "Invalid token"}, status=status.HTTP_400_BAD_REQUEST)
 
 # ---------------------------
@@ -92,7 +113,7 @@ class LogoutView(APIView):
 # ---------------------------
 
 class ArtistViewSet(viewsets.ModelViewSet):
-    queryset = Artist.objects.all()
+    queryset = Artist.objects.all().order_by('name')
     serializer_class = ArtistSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [filters.SearchFilter]
@@ -100,7 +121,7 @@ class ArtistViewSet(viewsets.ModelViewSet):
 
 
 class ArtPieceViewSet(viewsets.ModelViewSet):
-    queryset = ArtPiece.objects.all()
+    queryset = ArtPiece.objects.all().order_by('title')
     serializer_class = ArtPieceSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
@@ -109,51 +130,16 @@ class ArtPieceViewSet(viewsets.ModelViewSet):
 
 
 class ExhibitionViewSet(viewsets.ModelViewSet):
-    queryset = Exhibition.objects.all()
+    queryset = Exhibition.objects.all().order_by('-start_date')
     serializer_class = ExhibitionSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['status']
     search_fields = ['title']
-    
-    def list(self, request, *args, **kwargs):
-        """Override to include art_pieces in the response"""
-        response = super().list(request, *args, **kwargs)
-        
-        # Add art_pieces to each exhibition
-        if hasattr(response.data, 'get') and 'results' in response.data:
-            # Paginated response
-            exhibitions = response.data['results']
-        else:
-            # Non-paginated response
-            exhibitions = response.data if isinstance(response.data, list) else [response.data]
-        
-        for exhibition_data in exhibitions:
-            if 'id' in exhibition_data:
-                exhibition_id = exhibition_data['id']
-                art_pieces = ArtPiece.objects.filter(
-                    exhibitionartpiece__exhibition_id=exhibition_id
-                )
-                exhibition_data['art_pieces'] = ArtPieceSerializer(art_pieces, many=True).data
-        
-        return response
-    
-    def retrieve(self, request, *args, **kwargs):
-        """Override to include art_pieces in single exhibition response"""
-        response = super().retrieve(request, *args, **kwargs)
-        
-        exhibition_id = response.data.get('id')
-        if exhibition_id:
-            art_pieces = ArtPiece.objects.filter(
-                exhibitionartpiece__exhibition_id=exhibition_id
-            )
-            response.data['art_pieces'] = ArtPieceSerializer(art_pieces, many=True).data
-        
-        return response
 
 
 class ExhibitionArtPieceViewSet(viewsets.ModelViewSet):
-    queryset = ExhibitionArtPiece.objects.all()
+    queryset = ExhibitionArtPiece.objects.all().order_by('exhibition', 'art_piece')
     serializer_class = ExhibitionArtPieceSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend]
@@ -161,7 +147,7 @@ class ExhibitionArtPieceViewSet(viewsets.ModelViewSet):
 
 
 class VisitorViewSet(viewsets.ModelViewSet):
-    queryset = Visitor.objects.all()
+    queryset = Visitor.objects.all().order_by('name')
     serializer_class = VisitorSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [filters.SearchFilter]
@@ -169,25 +155,213 @@ class VisitorViewSet(viewsets.ModelViewSet):
 
 
 class RegistrationViewSet(viewsets.ModelViewSet):
-    serializer_class = RegistrationSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['visitor', 'exhibition', 'status', 'confirmed']
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return RegistrationCreateSerializer
+        return RegistrationSerializer
     
     def get_queryset(self):
         user = self.request.user
         user_role = getattr(user, 'role', 'visitor')
 
         if user_role in ['clerk', 'admin']:
-            # Clerks and admins can see all registrations with related data
             return Registration.objects.select_related('visitor', 'exhibition').order_by('-timestamp')
         
         try:
-            # Visitors only see their own registrations
             visitor = Visitor.objects.get(email=user.email)
             return Registration.objects.filter(visitor=visitor).select_related('visitor', 'exhibition').order_by('-timestamp')
         except Visitor.DoesNotExist:
             return Registration.objects.none()
+    
+    def create(self, request, *args, **kwargs):
+        """Handle registration creation with improved error handling"""
+        logger.info(f"Registration create called - User: {request.user.email}")
+        logger.info(f"Request data: {request.data}")
+        
+        try:
+            # Start transaction
+            with transaction.atomic():
+                # Get exhibition ID - try both field names
+                exhibition_id = request.data.get('exhibition') or request.data.get('exhibition_id')
+                
+                if not exhibition_id:
+                    logger.error("No exhibition ID provided in request")
+                    return Response(
+                        {'error': 'Exhibition ID is required', 'field': 'exhibition'}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Convert to integer if it's a string
+                try:
+                    exhibition_id = int(exhibition_id)
+                except (ValueError, TypeError):
+                    logger.error(f"Invalid exhibition ID format: {exhibition_id}")
+                    return Response(
+                        {'error': 'Exhibition ID must be a valid number', 'field': 'exhibition'}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Validate exhibition exists and is available
+                try:
+                    exhibition = Exhibition.objects.get(id=exhibition_id)
+                    logger.info(f"Exhibition found: {exhibition.title} (Status: {exhibition.status})")
+                    
+                    # Check if exhibition is available for registration
+                    if exhibition.status not in ['UPCOMING', 'ONGOING']:
+                        return Response(
+                            {'error': f'Registration is not available for exhibitions with status: {exhibition.status}'}, 
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                        
+                except Exhibition.DoesNotExist:
+                    logger.error(f"Exhibition with id {exhibition_id} not found")
+                    return Response(
+                        {'error': 'Exhibition not found', 'field': 'exhibition'}, 
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                # Get or create visitor profile
+                visitor_name = f"{request.user.first_name} {request.user.last_name}".strip()
+                if not visitor_name:
+                    visitor_name = request.user.username
+                
+                try:
+                    visitor, created = Visitor.objects.get_or_create(
+                        email=request.user.email,
+                        defaults={
+                            'name': visitor_name,
+                            'phone': getattr(request.user, 'phone', '')
+                        }
+                    )
+                    
+                    # Update visitor name if it was empty
+                    if not visitor.name:
+                        visitor.name = visitor_name
+                        visitor.save()
+                        
+                    logger.info(f"Visitor {'created' if created else 'found'}: {visitor.name} ({visitor.email})")
+                    
+                except Exception as e:
+                    logger.error(f"Error with visitor creation: {e}")
+                    return Response(
+                        {'error': f'Failed to create visitor profile: {str(e)}'}, 
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                # Check for duplicate registration
+                existing_registration = Registration.objects.filter(
+                    visitor=visitor, 
+                    exhibition=exhibition
+                ).first()
+                
+                if existing_registration:
+                    logger.info(f"Duplicate registration attempt - existing: {existing_registration.id}")
+                    return Response(
+                        {
+                            'error': 'You have already registered for this exhibition',
+                            'existing_registration_id': existing_registration.id,
+                            'status': existing_registration.status,
+                            'attendees_count': existing_registration.attendees_count
+                        }, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Validate attendees count
+                attendees_count = request.data.get('attendees_count', 1)
+                try:
+                    attendees_count = int(attendees_count)
+                    if attendees_count < 1:
+                        return Response(
+                            {'error': 'Attendees count must be at least 1', 'field': 'attendees_count'}, 
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    if attendees_count > 10:
+                        return Response(
+                            {'error': 'Maximum 10 attendees allowed per registration', 'field': 'attendees_count'}, 
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                except (ValueError, TypeError):
+                    return Response(
+                        {'error': 'Attendees count must be a valid number', 'field': 'attendees_count'}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                logger.info(f"Creating registration: Exhibition={exhibition_id}, Attendees={attendees_count}")
+                
+                # Create the registration
+                registration_data = {
+                    'visitor': visitor,
+                    'exhibition': exhibition,
+                    'attendees_count': attendees_count,
+                    'status': 'PENDING',
+                    'confirmed': False
+                }
+                
+                # Add optional fields only if they exist in the model
+                registration_fields = [f.name for f in Registration._meta.get_fields()]
+                if 'submitted_at' in registration_fields:
+                    registration_data['submitted_at'] = timezone.now()
+                
+                # Remove the queue_position calculation - let the model handle it automatically
+                # The Registration.save() method will handle queue position assignment
+                
+                registration = Registration.objects.create(**registration_data)
+                
+                logger.info(f"Registration created successfully: ID={registration.id}")
+                
+                # Prepare response data
+                response_data = {
+                    'id': registration.id,
+                    'visitor': visitor.id,
+                    'exhibition': exhibition.id,
+                    'attendees_count': registration.attendees_count,
+                    'status': registration.status,
+                    'confirmed': registration.confirmed,
+                    'timestamp': registration.timestamp.isoformat(),
+                    'visitor_name': visitor.name,
+                    'visitor_email': visitor.email,
+                    'exhibition_title': exhibition.title,
+                    'exhibition_status': exhibition.status
+                }
+                
+                # Add optional fields if they exist
+                if hasattr(registration, 'queue_position') and registration.queue_position:
+                    response_data['queue_position'] = registration.queue_position
+                if hasattr(registration, 'submitted_at') and registration.submitted_at:
+                    response_data['submitted_at'] = registration.submitted_at.isoformat()
+                
+                return Response(response_data, status=status.HTTP_201_CREATED)
+                
+        except IntegrityError as e:
+            error_msg = str(e).lower()
+            logger.error(f"Registration integrity error: {e}")
+            
+            if 'unique' in error_msg or 'duplicate' in error_msg:
+                return Response(
+                    {'error': 'You have already registered for this exhibition'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            else:
+                return Response(
+                    {'error': 'Registration failed due to data conflict'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+                
+        except Exception as e:
+            logger.error(f"Registration creation error: {e}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            
+            return Response(
+                {
+                    'error': f'Registration failed: {str(e)}',
+                    'type': type(e).__name__
+                }, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=False, methods=['get'])
     def my(self, request):
@@ -214,7 +388,16 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            registration.approve(request.user)
+            # Check if Registration model has approve method
+            if hasattr(registration, 'approve'):
+                registration.approve(request.user)
+            else:
+                # Manual approval if no approve method exists
+                registration.status = 'APPROVED'
+                registration.confirmed = True
+                registration.reviewed_by = request.user
+                registration.reviewed_at = timezone.now()
+                registration.save()
             
             return Response({
                 'message': 'Registration approved successfully',
@@ -223,6 +406,7 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                 'exhibition': registration.exhibition.title
             })
         except Exception as e:
+            logger.error(f"Registration approval error: {e}")
             return Response(
                 {'error': f'Failed to approve registration: {str(e)}'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -247,7 +431,18 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                 )
             
             reason = request.data.get('reason', '')
-            registration.reject(request.user, reason)
+            
+            # Check if Registration model has reject method
+            if hasattr(registration, 'reject'):
+                registration.reject(request.user, reason)
+            else:
+                # Manual rejection if no reject method exists
+                registration.status = 'REJECTED'
+                registration.confirmed = False
+                registration.reviewed_by = request.user
+                registration.reviewed_at = timezone.now()
+                registration.rejection_reason = reason
+                registration.save()
             
             return Response({
                 'message': 'Registration rejected successfully',
@@ -257,6 +452,7 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                 'reason': reason
             })
         except Exception as e:
+            logger.error(f"Registration rejection error: {e}")
             return Response(
                 {'error': f'Failed to reject registration: {str(e)}'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -277,9 +473,9 @@ class RegistrationViewSet(viewsets.ModelViewSet):
                 queue_info.append({
                     'registration_id': reg.id,
                     'exhibition_title': reg.exhibition.title,
-                    'queue_position': reg.queue_position,
-                    'submitted_at': reg.submitted_at or reg.timestamp,
-                    'estimated_wait': f"{max(1, reg.queue_position or 1)} day(s)",
+                    'queue_position': getattr(reg, 'queue_position', None),
+                    'submitted_at': getattr(reg, 'submitted_at', None) or reg.timestamp,
+                    'estimated_wait': f"{max(1, getattr(reg, 'queue_position', 1) or 1)} day(s)",
                     'attendees_count': reg.attendees_count
                 })
             
@@ -291,74 +487,14 @@ class RegistrationViewSet(viewsets.ModelViewSet):
         except Visitor.DoesNotExist:
             return Response({'pending_registrations': [], 'total_in_queue': 0})
         except Exception as e:
+            logger.error(f"Queue status error: {e}")
             return Response(
                 {'error': f'Failed to get queue status: {str(e)}'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def create(self, request, *args, **kwargs):
-        """Handle registration creation with queue system"""
-        try:
-            exhibition_id = request.data.get('exhibition_id')
-            
-            if not exhibition_id and 'exhibition' in request.data:
-                exhibition_data = request.data.get('exhibition')
-                if isinstance(exhibition_data, dict) and 'id' in exhibition_data:
-                    exhibition_id = exhibition_data['id']
-            
-            if not exhibition_id:
-                return Response(
-                    {'error': 'exhibition_id is required'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            try:
-                exhibition = Exhibition.objects.get(id=exhibition_id)
-            except Exhibition.DoesNotExist:
-                return Response(
-                    {'error': 'Exhibition not found'}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            visitor, created = Visitor.objects.get_or_create(
-                email=request.user.email,
-                defaults={
-                    'name': f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username,
-                    'phone': getattr(request.user, 'phone', '')
-                }
-            )
-            
-            existing_registration = Registration.objects.filter(
-                visitor=visitor, exhibition=exhibition
-            ).first()
-            
-            if existing_registration:
-                return Response(
-                    {'error': 'Already registered for this exhibition'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            attendees_count = request.data.get('attendees_count', 1)
-            registration = Registration.objects.create(
-                visitor=visitor,
-                exhibition=exhibition,
-                attendees_count=attendees_count,
-                status='PENDING',
-                confirmed=False
-            )
-            
-            serializer = self.get_serializer(registration)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-            
-        except Exception as e:
-            return Response(
-                {'error': f'Failed to create registration: {str(e)}'}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
 class ClerkViewSet(viewsets.ModelViewSet):
-    queryset = Clerk.objects.all()
+    queryset = Clerk.objects.all().order_by('name')
     serializer_class = ClerkSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [filters.SearchFilter]
@@ -366,7 +502,7 @@ class ClerkViewSet(viewsets.ModelViewSet):
 
 
 class SetupStatusViewSet(viewsets.ModelViewSet):
-    queryset = SetupStatus.objects.all()
+    queryset = SetupStatus.objects.all().order_by('-timestamp')
     serializer_class = SetupStatusSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend]
@@ -407,16 +543,13 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
         return self.request.user
 
 class UserListView(generics.ListAPIView):
-    queryset = User.objects.all()
+    queryset = User.objects.all().order_by('username')
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['username', 'email', 'first_name', 'last_name']
     filterset_fields = ['role', 'is_active']
     
-
-
-
 # ---------------------------
 # Dashboard Views
 # ---------------------------
@@ -461,7 +594,7 @@ class DashboardStatsView(APIView):
 # ---------------------------
 
 class ExhibitionDetailView(generics.RetrieveAPIView):
-    queryset = Exhibition.objects.all()
+    queryset = Exhibition.objects.all().order_by('-start_date')
     serializer_class = ExhibitionSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     
@@ -552,7 +685,7 @@ class MyRegistrationsView(generics.ListAPIView):
 # ---------------------------
 
 class ArtistDetailView(generics.RetrieveAPIView):
-    queryset = Artist.objects.all()
+    queryset = Artist.objects.all().order_by('name')
     serializer_class = ArtistSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
     
@@ -601,11 +734,8 @@ class TimestampMixin:
         return response
 
 # Apply custom permissions to existing viewsets
-# Update the existing viewsets with proper permissions
-
-# Override the existing viewsets with better permissions
 ArtistViewSet.permission_classes = [IsAdminOrReadOnly]
-ArtPieceViewSet.permission_classes = [IsAdminOrReadOnly]
+ArtPieceViewSet.permission_classes = [IsClerkOrAdminOrReadOnly] 
 ExhibitionViewSet.permission_classes = [IsClerkOrAdminOrReadOnly]
 ClerkViewSet.permission_classes = [IsAdminOrReadOnly]
 SetupStatusViewSet.permission_classes = [IsClerkOrAdminOrReadOnly]

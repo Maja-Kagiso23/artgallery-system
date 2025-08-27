@@ -10,7 +10,8 @@ import ArtPieceManagement from './pages/ArtPieceManagement';
 import ViewExhibitions from './pages/ViewExhibitions';
 import VisitorRegistrations from './pages/VisitorRegistrations';
 import ManageVisitors from './pages/ManageVisitors';
-import RegistrationManagement from './pages/RegistrationManagement'
+import RegistrationManagement from './pages/RegistrationManagement';
+import ExhibitionSetupManagement from './pages/ExhibitionSetupManagement';
 
 function App() {
   return (
@@ -20,7 +21,7 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           
-          {/* Dashboard - accessible by both admin and clerk */}
+          {/* Dashboard - accessible by all authenticated users */}
           <Route 
             path="/dashboard" 
             element={
@@ -30,6 +31,7 @@ function App() {
             } 
           />
           
+          {/* ADMIN ONLY ROUTES */}
           {/* Artist Management - only for admin users */}
           <Route 
             path="/artists" 
@@ -60,6 +62,27 @@ function App() {
             } 
           />
 
+          {/* CLERK AND ADMIN ROUTES */}
+          {/* Registration Management - for both admin and clerk users */}
+          <Route 
+            path="/registrations" 
+            element={
+              <ProtectedRoute requiredRole="clerk">
+                <RegistrationManagement />
+              </ProtectedRoute>
+            } 
+          />
+
+          {/* Exhibition Setup Management - for both admin and clerk users */}
+          <Route 
+            path="/exhibition-setup" 
+            element={
+              <ProtectedRoute requiredRole="clerk">
+                <ExhibitionSetupManagement />
+              </ProtectedRoute>
+            } 
+          />
+
           {/* Manage Visitors - for both admin and clerk users */}
           <Route 
             path="/manage-visitors" 
@@ -70,26 +93,34 @@ function App() {
             } 
           />
 
+          {/* Reports - for both admin and clerk users */}
           <Route 
-            path="/registrations" 
+            path="/reports" 
             element={
               <ProtectedRoute requiredRole="clerk">
-                <RegistrationManagement />
+                <div style={{ padding: '2rem', textAlign: 'center' }}>
+                  <h2>Reports & Analytics</h2>
+                  <p>Reports functionality coming soon...</p>
+                </div>
               </ProtectedRoute>
             } 
           />
-		  
-		  
           
-          {/* Public exhibitions - visitors can access (this should come AFTER admin routes) */}
+          {/* VISITOR/PUBLIC ROUTES */}
+          {/* Public exhibitions - visitors can access */}
           <Route 
             path="/gallery" 
-              element={<ViewExhibitions />}
+            element={<ViewExhibitions />}
           />
           
+          {/* User's own registrations */}
           <Route 
             path="/my-registrations" 
-              element={<VisitorRegistrations />}
+            element={
+              <ProtectedRoute>
+                <VisitorRegistrations />
+              </ProtectedRoute>
+            }
           />
           
           {/* Default redirect to dashboard if logged in, otherwise login */}
@@ -99,11 +130,113 @@ function App() {
           <Route 
             path="/unauthorized" 
             element={
-              <div className="min-h-screen flex items-center justify-center bg-gray-50">
-                <div className="text-center">
-                  <h1 className="text-2xl font-bold text-red-600 mb-4">Unauthorized Access</h1>
-                  <p className="text-gray-600 mb-4">You don't have permission to access this page.</p>
-                  <a href="/dashboard" className="text-blue-600 hover:text-blue-800">Go to Dashboard</a>
+              <div style={{
+                minHeight: '100vh',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#f8fafc'
+              }}>
+                <div style={{ textAlign: 'center', maxWidth: '500px', padding: '2rem' }}>
+                  <h1 style={{ 
+                    fontSize: '2rem', 
+                    fontWeight: 'bold', 
+                    color: '#dc2626', 
+                    marginBottom: '1rem' 
+                  }}>
+                    Unauthorized Access
+                  </h1>
+                  <p style={{ 
+                    color: '#64748b', 
+                    marginBottom: '2rem',
+                    fontSize: '1.1rem'
+                  }}>
+                    You don't have permission to access this page.
+                  </p>
+                  <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+                    <a 
+                      href="/dashboard" 
+                      style={{
+                        color: '#3b82f6',
+                        textDecoration: 'none',
+                        padding: '0.75rem 1.5rem',
+                        backgroundColor: '#eff6ff',
+                        borderRadius: '8px',
+                        fontWeight: '600',
+                        border: '1px solid #3b82f6'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.target.style.backgroundColor = '#3b82f6';
+                        e.target.style.color = 'white';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.target.style.backgroundColor = '#eff6ff';
+                        e.target.style.color = '#3b82f6';
+                      }}
+                    >
+                      Go to Dashboard
+                    </a>
+                    <a 
+                      href="/login" 
+                      style={{
+                        color: '#64748b',
+                        textDecoration: 'none',
+                        padding: '0.75rem 1.5rem',
+                        backgroundColor: '#f8fafc',
+                        borderRadius: '8px',
+                        fontWeight: '600',
+                        border: '1px solid #e2e8f0'
+                      }}
+                    >
+                      Login Again
+                    </a>
+                  </div>
+                </div>
+              </div>
+            } 
+          />
+
+          {/* 404 Not Found - catch all unmatched routes */}
+          <Route 
+            path="*" 
+            element={
+              <div style={{
+                minHeight: '100vh',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#f8fafc'
+              }}>
+                <div style={{ textAlign: 'center', maxWidth: '500px', padding: '2rem' }}>
+                  <h1 style={{ 
+                    fontSize: '2rem', 
+                    fontWeight: 'bold', 
+                    color: '#374151', 
+                    marginBottom: '1rem' 
+                  }}>
+                    Page Not Found
+                  </h1>
+                  <p style={{ 
+                    color: '#64748b', 
+                    marginBottom: '2rem',
+                    fontSize: '1.1rem'
+                  }}>
+                    The page you're looking for doesn't exist.
+                  </p>
+                  <a 
+                    href="/dashboard" 
+                    style={{
+                      color: '#3b82f6',
+                      textDecoration: 'none',
+                      padding: '0.75rem 1.5rem',
+                      backgroundColor: '#eff6ff',
+                      borderRadius: '8px',
+                      fontWeight: '600',
+                      border: '1px solid #3b82f6'
+                    }}
+                  >
+                    Return to Dashboard
+                  </a>
                 </div>
               </div>
             } 

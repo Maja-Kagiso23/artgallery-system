@@ -194,11 +194,38 @@ class ApiService {
     return data;
   }
 
-  async register(userData) {
-    return this.request('/auth/register/', {
-      method: 'POST',
-      body: userData,
-    });
+async register(userData) {
+    try {
+      const response = await fetch(`${this.baseURL}/register/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userData),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Handle validation errors from Django
+        if (response.status === 400) {
+          // Extract field-specific errors
+          const errorMessages = [];
+          for (const [field, errors] of Object.entries(data)) {
+            if (Array.isArray(errors)) {
+              errorMessages.push(`${field}: ${errors.join(', ')}`);
+            } else {
+              errorMessages.push(`${field}: ${errors}`);
+            }
+          }
+          throw new Error(errorMessages.join('; ') || 'Registration failed');
+        }
+        throw new Error(data.detail || data.message || 'Registration failed');
+      }
+
+      return data;
+    } catch (error) {
+      console.error('Registration error:', error);
+      throw error;
+    }
   }
 
   async logout() {

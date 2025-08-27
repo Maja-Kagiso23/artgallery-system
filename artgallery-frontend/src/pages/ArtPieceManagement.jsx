@@ -6,11 +6,16 @@ const ArtPieceManagement = () => {
   const { user } = useAuth();
   const [artPieces, setArtPieces] = useState([]);
   const [artists, setArtists] = useState([]);
+  const [exhibitions, setExhibitions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingArtPiece, setEditingArtPiece] = useState(null);
+  const [showAssignmentModal, setShowAssignmentModal] = useState(false);
+  const [selectedArtPiece, setSelectedArtPiece] = useState(null);
+  const [selectedExhibition, setSelectedExhibition] = useState('');
+  const [assignmentLoading, setAssignmentLoading] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -25,10 +30,11 @@ const ArtPieceManagement = () => {
     { value: 'UNAVAILABLE', label: 'Unavailable' }
   ];
 
-  // Fetch art pieces and artists on component mount
+  // Fetch art pieces, artists, and exhibitions on component mount
   useEffect(() => {
     fetchArtPieces();
     fetchArtists();
+    fetchExhibitions();
   }, []);
 
   const fetchArtPieces = async () => {
@@ -69,6 +75,22 @@ const ArtPieceManagement = () => {
     } catch (error) {
       console.error('Failed to fetch artists:', error);
       setError('Failed to load artists. Please ensure artists exist before adding art pieces.');
+    }
+  };
+
+  const fetchExhibitions = async () => {
+    try {
+      const response = await ApiService.getExhibitions();
+      const exhibitionsData = response.results || response;
+      
+      if (!Array.isArray(exhibitionsData)) {
+        console.warn('Expected array but got:', exhibitionsData);
+        setExhibitions([]);
+      } else {
+        setExhibitions(exhibitionsData);
+      }
+    } catch (error) {
+      console.error('Failed to fetch exhibitions:', error);
     }
   };
 
@@ -169,6 +191,46 @@ const ArtPieceManagement = () => {
     }
   };
 
+  const handleAssignToExhibition = (artPiece) => {
+    setSelectedArtPiece(artPiece);
+    setSelectedExhibition('');
+    setShowAssignmentModal(true);
+    setError('');
+  };
+
+// In the handleAssignmentSubmit function:
+const handleAssignmentSubmit = async () => {
+  if (!selectedArtPiece || !selectedExhibition) {
+    setError('Please select an exhibition');
+    return;
+  }
+
+  setAssignmentLoading(true);
+  try {
+    // Use the correct endpoint - make sure it matches exactly what's in urls.py
+    await ApiService.request('/exhibition-artpieces/', {
+      method: 'POST',
+      body: {
+        exhibition: parseInt(selectedExhibition),
+        art_piece: selectedArtPiece.id,
+        confirmed: false
+      }
+    });
+    
+    setSuccess(`"${selectedArtPiece.title}" assigned to exhibition successfully!`);
+    setShowAssignmentModal(false);
+    setSelectedArtPiece(null);
+    setSelectedExhibition('');
+    
+    setTimeout(() => setSuccess(''), 5000);
+  } catch (error) {
+    console.error('Failed to assign art piece:', error);
+    setError('Failed to assign art piece to exhibition. It may already be assigned.');
+  } finally {
+    setAssignmentLoading(false);
+  }
+};
+
   const handleCancel = () => {
     setFormData({
       title: '',
@@ -181,6 +243,13 @@ const ArtPieceManagement = () => {
     setEditingArtPiece(null);
     setError('');
     setSuccess('');
+  };
+
+  const handleAssignmentCancel = () => {
+    setShowAssignmentModal(false);
+    setSelectedArtPiece(null);
+    setSelectedExhibition('');
+    setError('');
   };
 
   const getArtistName = (artist) => {
@@ -512,6 +581,21 @@ const ArtPieceManagement = () => {
                           Edit
                         </button>
                         <button
+                          onClick={() => handleAssignToExhibition(artPiece)}
+                          style={{
+                            backgroundColor: '#ff9800',
+                            color: 'white',
+                            border: 'none',
+                            padding: '0.5rem 1rem',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            marginRight: '0.5rem',
+                            fontSize: '0.9rem'
+                          }}
+                        >
+                          Assign
+                        </button>
+                        <button
                           onClick={() => handleDelete(artPiece.id, artPiece.title)}
                           style={{
                             backgroundColor: '#f44336',
@@ -532,6 +616,91 @@ const ArtPieceManagement = () => {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Assignment Modal */}
+      {showAssignmentModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            padding: '2rem',
+            borderRadius: '8px',
+            width: '90%',
+            maxWidth: '500px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
+          }}>
+            <h2>Assign Art Piece to Exhibition</h2>
+            <p>Assign "<strong>{selectedArtPiece?.title}</strong>" to an exhibition:</p>
+            
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                Select Exhibition *
+              </label>
+              <select
+                value={selectedExhibition}
+                onChange={(e) => setSelectedExhibition(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  border: '1px solid #ddd',
+                  borderRadius: '4px',
+                  boxSizing: 'border-box'
+                }}
+              >
+                <option value="">Select an exhibition...</option>
+                {exhibitions.map(exhibition => (
+                  <option key={exhibition.id} value={exhibition.id}>
+                    {exhibition.title} ({exhibition.status})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={handleAssignmentCancel}
+                style={{
+                  backgroundColor: '#9e9e9e',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontWeight: '600'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAssignmentSubmit}
+                disabled={assignmentLoading || !selectedExhibition}
+                style={{
+                  backgroundColor: '#4CAF50',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '4px',
+                  cursor: assignmentLoading || !selectedExhibition ? 'not-allowed' : 'pointer',
+                  fontWeight: '600',
+                  opacity: assignmentLoading || !selectedExhibition ? 0.7 : 1
+                }}
+              >
+                {assignmentLoading ? 'Assigning...' : 'Assign to Exhibition'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

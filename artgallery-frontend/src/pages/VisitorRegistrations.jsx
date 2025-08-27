@@ -82,122 +82,80 @@ const VisitorRegistrations = () => {
     setAttendeesCount(1);
   };
 
-  const submitRegistration = async () => {
-    if (!selectedExhibition) return;
+const submitRegistration = async () => {
+  if (!selectedExhibition) return;
+  
+  try {
+    setRegistrationLoading(true);
     
-    try {
-      setRegistrationLoading(true);
+    // Use 'exhibition' instead of 'exhibition_id' for DRF compatibility
+    const registrationData = {
+      exhibition: selectedExhibition.id,  // Changed from exhibition_id
+      attendees_count: attendeesCount
+    };
+    
+    console.log("Submitting registration:", registrationData);
+    
+    const response = await ApiService.request('/registrations/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(registrationData)
+    });
+    
+    console.log("Registration response:", response);
+    
+    // Refresh data
+    await fetchData();
+    
+    setShowRegistrationModal(false);
+    setSelectedExhibition(null);
+    
+    // Success message
+    const queuePosition = response.queue_position || 'processing';
+    alert(
+      `Successfully registered for "${selectedExhibition.title}" with ${attendeesCount} attendee${attendeesCount !== 1 ? 's' : ''}!\n\n` +
+      `Your registration is now in the queue (Position: ${queuePosition}). ` +
+      `Please wait for clerk approval before your registration is confirmed.`
+    );
+    
+  } catch (error) {
+    console.error('Registration failed:', error);
+    
+    let errorMessage = 'Registration failed';
+    
+    if (error.response?.data) {
+      const responseData = error.response.data;
       
-      const registrationData = {
-        exhibition_id: selectedExhibition.id,
-        attendees_count: attendeesCount
-      };
-      
-      console.log("📝 Submitting registration:", registrationData);
-      
-      const response = await ApiService.request('/registrations/', {
-        method: 'POST',
-        body: JSON.stringify(registrationData)
-      });
-      
-      console.log("✅ Registration response:", response);
-      
-      // Refresh data to show new registration
-      await fetchData();
-      
+      // Handle field-specific errors
+      if (responseData.exhibition) {
+        errorMessage = Array.isArray(responseData.exhibition) 
+          ? responseData.exhibition[0] 
+          : responseData.exhibition;
+      } else if (responseData.attendees_count) {
+        errorMessage = Array.isArray(responseData.attendees_count) 
+          ? responseData.attendees_count[0] 
+          : responseData.attendees_count;
+      } else if (responseData.error) {
+        errorMessage = responseData.error;
+      } else if (responseData.detail) {
+        errorMessage = responseData.detail;
+      }
+    }
+    
+    alert(errorMessage);
+    
+    // Close modal if it's a duplicate registration
+    if (errorMessage.toLowerCase().includes('already registered')) {
       setShowRegistrationModal(false);
       setSelectedExhibition(null);
-      
-      // Show queue position message
-      const queuePosition = response.queue_position || 'Unknown';
-      alert(
-        `Successfully registered for "${selectedExhibition.title}" with ${attendeesCount} attendee${attendeesCount !== 1 ? 's' : ''}!\n\n` +
-        `Your registration is now in the queue at position ${queuePosition}. ` +
-        `Please wait for clerk approval before your registration is confirmed.`
-      );
-      
-    } catch (error) {
-      console.error('❌ Registration failed:', error);
-      
-      // Handle specific error cases
-      let errorMessage = 'Registration failed';
-      
-      if (error.response) {
-        const status = error.response.status;
-        const responseData = error.response.data;
-        
-        console.log('🔍 Error response details:', { status, data: responseData });
-        
-        if (status === 400) {
-          // Check for duplicate registration error
-          if (responseData && (
-            (typeof responseData === 'string' && responseData.toLowerCase().includes('already registered')) ||
-            (responseData.detail && responseData.detail.toLowerCase().includes('already registered')) ||
-            (responseData.error && responseData.error.toLowerCase().includes('already registered')) ||
-            (responseData.message && responseData.message.toLowerCase().includes('already registered')) ||
-            (responseData.non_field_errors && responseData.non_field_errors.some(msg => 
-              msg.toLowerCase().includes('already registered') || 
-              msg.toLowerCase().includes('duplicate') || 
-              msg.toLowerCase().includes('already applied')
-            ))
-          )) {
-            errorMessage = `You have already registered for "${selectedExhibition.title}". Please check your registrations list.`;
-          } else if (responseData && (
-            (responseData.detail && responseData.detail.toLowerCase().includes('exhibition is full')) ||
-            (responseData.error && responseData.error.toLowerCase().includes('exhibition is full')) ||
-            (responseData.message && responseData.message.toLowerCase().includes('exhibition is full'))
-          )) {
-            errorMessage = `Sorry, "${selectedExhibition.title}" is currently full. You can try registering later if spots become available.`;
-          } else {
-            // Generic 400 error
-            const detailMessage = responseData?.detail || responseData?.error || responseData?.message;
-            errorMessage = detailMessage ? `Registration failed: ${detailMessage}` : 'Invalid registration data. Please check your information and try again.';
-          }
-        } else if (status === 401) {
-          errorMessage = 'You must be logged in to register for exhibitions.';
-        } else if (status === 403) {
-          errorMessage = 'You do not have permission to register for this exhibition.';
-        } else if (status === 404) {
-          errorMessage = 'Exhibition not found. It may have been removed or is no longer available.';
-        } else if (status === 500) {
-          // Check if it's a duplicate registration causing the 500 error
-          if (responseData && (
-            (typeof responseData === 'string' && (
-              responseData.toLowerCase().includes('already registered') ||
-              responseData.toLowerCase().includes('duplicate') ||
-              responseData.toLowerCase().includes('unique constraint')
-            )) ||
-            (responseData.detail && (
-              responseData.detail.toLowerCase().includes('already registered') ||
-              responseData.detail.toLowerCase().includes('duplicate') ||
-              responseData.detail.toLowerCase().includes('unique constraint')
-            ))
-          )) {
-            errorMessage = `You have already registered for "${selectedExhibition.title}". Please check your registrations list.`;
-          } else {
-            errorMessage = 'Server error occurred. Please try again later or contact support if the problem persists.';
-          }
-        } else {
-          errorMessage = `Registration failed with error ${status}. Please try again.`;
-        }
-      } else if (error.request) {
-        errorMessage = 'Unable to connect to the server. Please check your internet connection and try again.';
-      } else {
-        errorMessage = `Registration failed: ${error.message}`;
-      }
-      
-      alert(errorMessage);
-      
-      // If it's a duplicate registration, close the modal and refresh data
-      if (errorMessage.toLowerCase().includes('already registered')) {
-        setShowRegistrationModal(false);
-        setSelectedExhibition(null);
-        await fetchData(); // Refresh to show the existing registration
-      }
-    } finally {
-      setRegistrationLoading(false);
+      await fetchData();
     }
-  };
+  } finally {
+    setRegistrationLoading(false);
+  }
+};
 
   const cancelRegistration = async (registrationId) => {
     if (!confirm('Are you sure you want to cancel this registration?')) return;

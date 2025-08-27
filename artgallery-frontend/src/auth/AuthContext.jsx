@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import apiService from '../api/apiService';
 
 const AuthContext = createContext();
@@ -10,45 +10,49 @@ export const AuthProvider = ({ children }) => {
 
   // Check if user is already logged in on app start
   useEffect(() => {
-    const token = apiService.getAuthToken(); // Use apiService method
-    const userData = localStorage.getItem('user_data'); // Match apiService key
+    const token = apiService.getAuthToken();
+    const userData = localStorage.getItem('user_data');
     
     if (token && userData) {
-      setIsAuthenticated(true);
-      setUser(JSON.parse(userData));
+      try {
+        setIsAuthenticated(true);
+        setUser(JSON.parse(userData));
+      } catch (error) {
+        console.error('Error parsing user data:', error);
+        localStorage.removeItem('user_data');
+        localStorage.removeItem('access_token');
+      }
     }
     setLoading(false);
   }, []);
 
   const login = async (loginResponse) => {
-    // apiService.login() already handles token storage
-    // Just update the auth state
     setIsAuthenticated(true);
     setUser(loginResponse.user);
   };
 
   const logout = () => {
-    apiService.logout(); // This handles token removal
+    apiService.logout();
     setIsAuthenticated(false);
     setUser(null);
   };
 
   const hasPermission = (requiredRole) => {
-    // Use apiService method
     return apiService.hasPermission(requiredRole);
   };
 
-  const value = {
+  // Use useMemo to stabilize the context value
+  const value = useMemo(() => ({
     isAuthenticated,
     user,
     login,
     logout,
     hasPermission,
     loading
-  };
+  }), [isAuthenticated, user, loading]);
 
   if (loading) {
-    return <div>Loading...</div>; // Or your loading component
+    return <div>Loading...</div>;
   }
 
   return (
@@ -58,10 +62,13 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-export const useAuth = () => {
+// Export the hook with a consistent pattern
+const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 };
+
+export { useAuth };

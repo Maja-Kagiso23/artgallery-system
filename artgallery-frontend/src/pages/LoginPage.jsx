@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import apiService from '../api/apiService';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '../auth/AuthContext'; // Import useAuth
+import { useAuth } from '../auth/AuthContext';
+import ApiService from '../api/apiService';
 
 const LoginPage = () => {
   const [credentials, setCredentials] = useState({
@@ -25,14 +25,14 @@ const LoginPage = () => {
   const [showRegistrationSuccess, setShowRegistrationSuccess] = useState(false);
   
   // Get auth context
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, user } = useAuth();
 
   // Redirect if already authenticated
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && user) {
       navigate('/dashboard');
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, user, navigate]);
 
   useEffect(() => {
     if (location.state?.registrationSuccess) {
@@ -91,7 +91,7 @@ const LoginPage = () => {
     }
 
     try {
-      const data = await apiService.login({
+      const data = await ApiService.login({
         username: credentials.username,
         password: credentials.password
       });
@@ -111,6 +111,7 @@ const LoginPage = () => {
       }, 1500);
 
     } catch (error) {
+      console.error('Login error:', error);
       setApiResponse({
         status: 'error',
         message: error.message || 'Invalid username or password'
@@ -122,39 +123,55 @@ const LoginPage = () => {
 
   return (
     <div style={{ 
-      padding: '2rem', 
-      backgroundColor: '#f0f0f0',
-      minHeight: '100vh',
+      minHeight: '100vh', 
+      backgroundColor: '#f8fafc', 
+      padding: '2rem 1rem',
       display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center'
+      alignItems: 'center',
+      justifyContent: 'center'
     }}>
       <div style={{
         backgroundColor: 'white',
-        padding: '2rem',
-        borderRadius: '8px',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        padding: '3rem 2rem',
+        borderRadius: '16px',
+        boxShadow: '0 4px 6px rgba(0,0,0,0.07)',
         width: '100%',
-        maxWidth: '400px'
+        maxWidth: '450px'
       }}>
-        <h1 style={{ 
-          color: '#333', 
-          marginBottom: '1.5rem',
-          textAlign: 'center'
+        {/* Header Section */}
+        <div style={{
+          textAlign: 'center',
+          marginBottom: '2.5rem',
+          paddingBottom: '1.5rem',
+          borderBottom: '1px solid #e2e8f0'
         }}>
-          Login
-        </h1>
+          <h1 style={{ 
+            fontSize: 'clamp(1.8rem, 4vw, 2.5rem)', 
+            fontWeight: '700', 
+            color: '#1e293b',
+            marginBottom: '0.5rem'
+          }}>
+            Welcome Back
+          </h1>
+          <p style={{ 
+            color: '#64748b', 
+            fontSize: '1.1rem'
+          }}>
+            Sign in to your account
+          </p>
+        </div>
         
         {/* Registration Success Message */}
         {showRegistrationSuccess && (
           <div style={{
-            padding: '0.75rem',
-            marginBottom: '1rem',
-            borderRadius: '4px',
-            backgroundColor: '#E8F5E9',
-            color: '#2E7D32',
-            border: '1px solid #C8E6C9',
-            textAlign: 'center'
+            padding: '1rem',
+            marginBottom: '1.5rem',
+            borderRadius: '12px',
+            backgroundColor: '#f0fdf4',
+            color: '#166534',
+            border: '1px solid #bbf7d0',
+            textAlign: 'center',
+            fontSize: '0.95rem'
           }}>
             {location.state?.message || 'Registration successful! Please login.'}
           </div>
@@ -163,22 +180,28 @@ const LoginPage = () => {
         {/* API Response Message Box */}
         {apiResponse.status && (
           <div style={{
-            padding: '0.75rem',
-            marginBottom: '1rem',
-            borderRadius: '4px',
-            backgroundColor: apiResponse.status === 'success' ? '#E8F5E9' : '#FFEBEE',
-            color: apiResponse.status === 'success' ? '#2E7D32' : '#C62828',
-            border: `1px solid ${apiResponse.status === 'success' ? '#C8E6C9' : '#FFCDD2'}`,
-            textAlign: 'center'
+            padding: '1rem',
+            marginBottom: '1.5rem',
+            borderRadius: '12px',
+            backgroundColor: apiResponse.status === 'success' ? '#f0fdf4' : '#fef2f2',
+            color: apiResponse.status === 'success' ? '#166534' : '#dc2626',
+            border: `1px solid ${apiResponse.status === 'success' ? '#bbf7d0' : '#fecaca'}`,
+            textAlign: 'center',
+            fontSize: '0.95rem'
           }}>
             {apiResponse.message}
           </div>
         )}
 
         <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem' }}>
-              Username:
+          <div style={{ marginBottom: '1.5rem' }}>
+            <label style={{ 
+              display: 'block', 
+              marginBottom: '0.5rem',
+              fontWeight: '600',
+              color: '#374151'
+            }}>
+              Username
             </label>
             <input
               type="text"
@@ -188,23 +211,45 @@ const LoginPage = () => {
               style={{
                 display: 'block',
                 width: '100%',
-                padding: '0.5rem',
-                border: `1px solid ${fieldErrors.username ? '#F44336' : '#ddd'}`,
-                borderRadius: '4px'
+                padding: '0.875rem 1rem',
+                border: `2px solid ${fieldErrors.username ? '#ef4444' : '#e2e8f0'}`,
+                borderRadius: '8px',
+                fontSize: '1rem',
+                transition: 'all 0.2s ease',
+                backgroundColor: loading ? '#f8fafc' : 'white'
               }}
-              required
               disabled={loading}
+              onFocus={(e) => {
+                if (!fieldErrors.username) {
+                  e.target.style.borderColor = '#3b82f6';
+                }
+              }}
+              onBlur={(e) => {
+                if (!fieldErrors.username) {
+                  e.target.style.borderColor = '#e2e8f0';
+                }
+              }}
             />
             {fieldErrors.username && (
-              <span style={{ color: '#F44336', fontSize: '0.8rem' }}>
+              <span style={{ 
+                color: '#ef4444', 
+                fontSize: '0.875rem',
+                marginTop: '0.25rem',
+                display: 'block'
+              }}>
                 {fieldErrors.username}
               </span>
             )}
           </div>
 
-          <div style={{ marginBottom: '1.5rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem' }}>
-              Password:
+          <div style={{ marginBottom: '2rem' }}>
+            <label style={{ 
+              display: 'block', 
+              marginBottom: '0.5rem',
+              fontWeight: '600',
+              color: '#374151'
+            }}>
+              Password
             </label>
             <input
               type="password"
@@ -214,15 +259,32 @@ const LoginPage = () => {
               style={{
                 display: 'block',
                 width: '100%',
-                padding: '0.5rem',
-                border: `1px solid ${fieldErrors.password ? '#F44336' : '#ddd'}`,
-                borderRadius: '4px'
+                padding: '0.875rem 1rem',
+                border: `2px solid ${fieldErrors.password ? '#ef4444' : '#e2e8f0'}`,
+                borderRadius: '8px',
+                fontSize: '1rem',
+                transition: 'all 0.2s ease',
+                backgroundColor: loading ? '#f8fafc' : 'white'
               }}
-              required
               disabled={loading}
+              onFocus={(e) => {
+                if (!fieldErrors.password) {
+                  e.target.style.borderColor = '#3b82f6';
+                }
+              }}
+              onBlur={(e) => {
+                if (!fieldErrors.password) {
+                  e.target.style.borderColor = '#e2e8f0';
+                }
+              }}
             />
             {fieldErrors.password && (
-              <span style={{ color: '#F44336', fontSize: '0.8rem' }}>
+              <span style={{ 
+                color: '#ef4444', 
+                fontSize: '0.875rem',
+                marginTop: '0.25rem',
+                display: 'block'
+              }}>
                 {fieldErrors.password}
               </span>
             )}
@@ -233,20 +295,30 @@ const LoginPage = () => {
             disabled={loading}
             style={{
               width: '100%',
-              padding: '0.75rem',
-              backgroundColor: loading ? '#cccccc' : '#4285f4',
+              padding: '1rem',
+              backgroundColor: loading ? '#9ca3af' : '#3b82f6',
               color: 'white',
               border: 'none',
-              borderRadius: '4px',
+              borderRadius: '8px',
               cursor: loading ? 'not-allowed' : 'pointer',
-              transition: 'all 0.3s ease',
               fontWeight: '600',
               fontSize: '1rem',
+              transition: 'all 0.2s ease',
               position: 'relative',
-              ':hover': {
-                backgroundColor: loading ? '#cccccc' : '#3367d6',
-                transform: loading ? 'none' : 'translateY(-1px)',
-                boxShadow: loading ? 'none' : '0 2px 4px rgba(0,0,0,0.2)'
+              boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+            }}
+            onMouseEnter={(e) => {
+              if (!loading) {
+                e.target.style.backgroundColor = '#2563eb';
+                e.target.style.transform = 'translateY(-1px)';
+                e.target.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!loading) {
+                e.target.style.backgroundColor = '#3b82f6';
+                e.target.style.transform = 'translateY(0)';
+                e.target.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)';
               }
             }}
           >
@@ -263,8 +335,8 @@ const LoginPage = () => {
                   justifyContent: 'center'
                 }}>
                   <div style={{
-                    width: '1rem',
-                    height: '1rem',
+                    width: '1.25rem',
+                    height: '1.25rem',
                     border: '2px solid rgba(255,255,255,0.3)',
                     borderTopColor: 'white',
                     borderRadius: '50%',
@@ -277,29 +349,45 @@ const LoginPage = () => {
             ) : 'Sign In'}
           </button>
 
-          <div style={{ textAlign: 'center', marginTop: '1rem' }}>
-            <p style={{ marginBottom: '0.5rem' }}>Don't have an account?</p>
+          <div style={{ 
+            textAlign: 'center', 
+            marginTop: '2rem',
+            paddingTop: '1.5rem',
+            borderTop: '1px solid #e2e8f0'
+          }}>
             <Link 
               to="/register" 
               style={{
-                display: 'inline-block',
-                padding: '0.5rem 1rem',
-                backgroundColor: '#f0f0f0',
-                color: '#4285f4',
-                borderRadius: '4px',
+                color: '#3b82f6',
                 textDecoration: 'none',
                 fontWeight: '600',
-                transition: 'all 0.2s ease',
-                ':hover': {
-                  backgroundColor: '#e0e0e0'
-                }
+                fontSize: '1rem',
+                transition: 'color 0.2s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.color = '#2563eb';
+                e.target.style.textDecoration = 'underline';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.color = '#3b82f6';
+                e.target.style.textDecoration = 'none';
               }}
             >
-              Register Now
+              Don't have an account?
             </Link>
           </div>
         </form>
       </div>
+
+      {/* Add CSS animation for the loading spinner */}
+      <style>
+        {`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}
+      </style>
     </div>
   );
 };
