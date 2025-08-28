@@ -12,6 +12,8 @@ import VisitorRegistrations from './pages/VisitorRegistrations';
 import ManageVisitors from './pages/ManageVisitors';
 import RegistrationManagement from './pages/RegistrationManagement';
 import ExhibitionSetupManagement from './pages/ExhibitionSetupManagement';
+import ReportsPage from './pages/ReportsPage'
+
 
 function App() {
   return (
@@ -61,6 +63,16 @@ function App() {
               </ProtectedRoute>
             } 
           />
+		  
+		  <Route 
+            path="/reports" 
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <ReportsPage />
+              </ProtectedRoute>
+            } 
+          />
+
 
           {/* CLERK AND ADMIN ROUTES */}
           {/* Registration Management - for both admin and clerk users */}
